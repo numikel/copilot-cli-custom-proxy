@@ -91,6 +91,16 @@ cargo test -p proxy-core                 # tests: model swap, auth, missing key 
 cargo run -p proxy-core --example demo   # end-to-end demo against a stub endpoint
 ```
 
+## CI / prebuilt executable
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
+
+- **test** (Linux) — runs the core tests and type-checks the Tauri app.
+- **build-windows** — builds the release `.exe` and the MSI/NSIS installers, and
+  uploads them as workflow **artifacts** (downloadable from the run's summary page).
+
+Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
+
 ## Notes
 
 - **OpenAI-compatible** endpoints (Chat Completions API) are supported.

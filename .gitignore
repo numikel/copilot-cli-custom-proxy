@@ -1,7 +1,7 @@
 # Rust / Cargo
 /target
 **/target
-Cargo.lock
+# Cargo.lock is committed for reproducible CI builds (this is a binary app).
 
 # Tauri build output
 /src-tauri/gen
