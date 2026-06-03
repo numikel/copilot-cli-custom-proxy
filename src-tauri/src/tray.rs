@@ -3,74 +3,85 @@ use std::sync::Arc;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    App, Manager,
+    AppHandle, Manager, Wry,
 };
 
-fn status_text(model: &str) -> String {
-    format!("Active model: {model}")
+const TRAY_ID: &str = "main";
+
+fn status_text(state: &AppState) -> String {
+    let models = state.models();
+    if models.is_empty() {
+        "No models — set API key, then Refresh models".to_string()
+    } else {
+        format!("Active model: {}", state.selected_model())
+    }
 }
 
-/// Builds the tray icon with a menu: status, model list (toggles),
-/// open settings, and quit.
-pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
-    let handle = app.handle();
+/// Builds the tray menu from the current state: status line, model toggles,
+/// then Refresh models / Run Copilot / Set API key / Quit.
+fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     let selected = state.selected_model();
 
-    let status = MenuItem::with_id(
-        handle,
-        "status",
-        status_text(&selected),
-        false,
-        None::<&str>,
-    )?;
+    let status = MenuItem::with_id(app, "status", status_text(state), false, None::<&str>)?;
 
-    let mut model_items = Vec::new();
-    for model in &state.config.models {
+    let menu = Menu::new(app)?;
+    menu.append(&status)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+
+    for model in state.models() {
         let item = CheckMenuItem::with_id(
-            handle,
+            app,
             format!("model::{model}"),
-            model,
+            &model,
             true,
-            model == &selected,
+            model == selected,
             None::<&str>,
         )?;
-        model_items.push(item);
+        menu.append(&item)?;
     }
 
-    let run_copilot = MenuItem::with_id(handle, "run_copilot", "Run Copilot", true, None::<&str>)?;
-    let settings = MenuItem::with_id(handle, "settings", "Set API key…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "refresh_models", "Refresh models", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "run_copilot", "Run Copilot", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "settings", "Set API key…", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
-    let menu = Menu::new(handle)?;
-    menu.append(&status)?;
-    menu.append(&PredefinedMenuItem::separator(handle)?)?;
-    for item in &model_items {
-        menu.append(item)?;
+    Ok(menu)
+}
+
+/// Rebuilds the tray menu from the current state and applies it. Call this
+/// whenever the model list or selection changes.
+pub fn apply_menu(app: &AppHandle) -> tauri::Result<()> {
+    let state = app.state::<Arc<AppState>>();
+    let menu = build_menu(app, &state)?;
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_menu(Some(menu))?;
     }
-    menu.append(&PredefinedMenuItem::separator(handle)?)?;
-    menu.append(&run_copilot)?;
-    menu.append(&settings)?;
-    menu.append(&quit)?;
+    Ok(())
+}
+
+/// Creates the tray icon. The menu event handler reads managed state and
+/// rebuilds the menu via [`apply_menu`], so it always reflects current models.
+pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let state = app.state::<Arc<AppState>>();
+    let menu = build_menu(app.handle(), &state)?;
 
     let icon = app
         .default_window_icon()
         .cloned()
         .expect("missing default app icon (check bundle.icon in tauri.conf.json)");
 
-    let model_items_handler = model_items.clone();
-    let status_handler = status.clone();
-    let state_handler = state.clone();
-
-    let _tray = TrayIconBuilder::with_id("main")
+    let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Copilot Proxy")
         .menu(&menu)
-        .on_menu_event(move |app, event| {
+        .on_menu_event(|app, event| {
             let id = event.id().as_ref().to_string();
             if id == "quit" {
                 app.exit(0);
             } else if id == "run_copilot" {
-                if let Err(e) = crate::commands::launch_copilot(&state_handler) {
+                let state = app.state::<Arc<AppState>>();
+                if let Err(e) = crate::commands::launch_copilot(&state) {
                     tracing::error!("failed to launch Copilot: {e}");
                 }
             } else if id == "settings" {
@@ -78,12 +89,22 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+            } else if id == "refresh_models" {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<Arc<AppState>>().inner().clone();
+                    match proxy_core::fetch_models(&state).await {
+                        Ok(models) => {
+                            state.set_models(models);
+                            let _ = apply_menu(&app);
+                        }
+                        Err(e) => tracing::error!("refresh models failed: {e}"),
+                    }
+                });
             } else if let Some(model) = id.strip_prefix("model::") {
-                state_handler.set_selected_model(model.to_string());
-                for item in &model_items_handler {
-                    let _ = item.set_checked(item.id().as_ref() == id);
-                }
-                let _ = status_handler.set_text(status_text(model));
+                let state = app.state::<Arc<AppState>>();
+                state.set_selected_model(model.to_string());
+                let _ = apply_menu(app);
             }
         })
         .build(app)?;

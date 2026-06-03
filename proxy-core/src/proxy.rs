@@ -39,6 +39,51 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// Fetches the available model ids from `{corporate_base_url}/models`
+/// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`). Requires an API key.
+pub async fn fetch_models(state: &AppState) -> Result<Vec<String>, String> {
+    let api_key = state
+        .api_key()
+        .ok_or("API key is not set — enter it before fetching models")?;
+
+    let url = format!("{}/models", state.config.base_url_trimmed());
+    let resp = state
+        .http
+        .get(&url)
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", api_key.expose_secret()),
+        )
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach {url}: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("endpoint returned {status} for {url}"));
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid JSON from {url}: {e}"))?;
+
+    let models: Vec<String> = json
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if models.is_empty() {
+        return Err(format!("no models returned by {url}"));
+    }
+    Ok(models)
+}
+
 async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();

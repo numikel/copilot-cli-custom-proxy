@@ -52,7 +52,6 @@ fn main() {
     let config = load_config();
     let state = Arc::new(AppState::new(config));
     let proxy_state = state.clone();
-    let tray_state = state.clone();
 
     tauri::Builder::default()
         .manage(state)
@@ -60,7 +59,8 @@ fn main() {
             commands::get_state,
             commands::set_api_key,
             commands::set_model,
-            commands::run_copilot
+            commands::run_copilot,
+            commands::refresh_models
         ])
         .setup(move |app| {
             // The proxy server starts in the background, on the address from the config.
@@ -70,7 +70,7 @@ fn main() {
                     tracing::error!("proxy server stopped: {e}");
                 }
             });
-            tray::build_tray(app, tray_state.clone())?;
+            tray::build_tray(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -1,7 +1,7 @@
 use proxy_core::{AppState, RequestLog};
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 /// State view passed to the UI (without exposing the API key itself).
 #[derive(Serialize)]
@@ -18,7 +18,7 @@ pub struct StateView {
 #[tauri::command]
 pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
     StateView {
-        models: state.config.models.clone(),
+        models: state.models(),
         selected_model: state.selected_model(),
         has_api_key: state.has_api_key(),
         listen_addr: state.config.listen_addr.clone(),
@@ -30,6 +30,17 @@ pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
 #[tauri::command]
 pub fn set_api_key(state: State<'_, Arc<AppState>>, key: String) {
     state.set_api_key(key);
+}
+
+/// Fetches the model list from `{corporate_base_url}/models`, stores it, and
+/// rebuilds the tray menu. Returns the fetched models for the UI.
+#[tauri::command]
+pub async fn refresh_models(app: AppHandle) -> Result<Vec<String>, String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let models = proxy_core::fetch_models(&state).await?;
+    state.set_models(models.clone());
+    let _ = crate::tray::apply_menu(&app);
+    Ok(models)
 }
 
 #[tauri::command]

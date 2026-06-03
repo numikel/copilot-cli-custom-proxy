@@ -12,8 +12,12 @@ listen_addr = "127.0.0.1:8080"
 # The request path from Copilot (e.g. /chat/completions) is appended to this URL.
 corporate_base_url = "https://your-endpoint.example.com/v1"
 
-# Model selected at startup (must be present in the `models` list).
-default_model = "model-a"
+# Both settings below are OPTIONAL. By default the model list is fetched from
+# {corporate_base_url}/models once you enter your API key (and via the tray's
+# "Refresh models"). Uncomment to pre-seed a static list / default selection.
 
-# List of models shown in the tray menu for quick switching.
-models = ["model-a", "model-b", "model-c"]
+# Model selected at startup (must be present in `models` if that is set).
+# default_model = "model-a"
+
+# Static model list shown before authenticating. Leave unset to fetch from the endpoint.
+# models = ["model-a", "model-b", "model-c"]

@@ -26,6 +26,8 @@ pub struct RequestLog {
 /// visible to the proxy.
 pub struct AppState {
     pub config: Config,
+    /// Available models (seeded from config, then refreshed from the endpoint).
+    models: Mutex<Vec<String>>,
     /// Currently selected model (substituted into the `model` field of requests).
     selected_model: Mutex<String>,
     /// API key — in memory only, wrapped in `SecretString`
@@ -39,9 +41,17 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let selected_model = config.default_model.clone();
+        let models = config.models.clone();
+        // Initial selection: configured default if valid, else the first model.
+        let selected_model = config
+            .default_model
+            .clone()
+            .filter(|m| models.is_empty() || models.contains(m))
+            .or_else(|| models.first().cloned())
+            .unwrap_or_default();
         Self {
             config,
+            models: Mutex::new(models),
             selected_model: Mutex::new(selected_model),
             api_key: Mutex::new(None),
             request_log: Mutex::new(RequestLog::default()),
@@ -49,15 +59,32 @@ impl AppState {
         }
     }
 
+    pub fn models(&self) -> Vec<String> {
+        self.models.lock().unwrap().clone()
+    }
+
+    /// Replaces the available model list (e.g. after fetching from the endpoint).
+    /// Keeps the current selection if still present, otherwise picks the first.
+    pub fn set_models(&self, models: Vec<String>) {
+        {
+            let mut selected = self.selected_model.lock().unwrap();
+            if !models.iter().any(|m| m == &*selected) {
+                *selected = models.first().cloned().unwrap_or_default();
+            }
+        }
+        *self.models.lock().unwrap() = models;
+    }
+
     pub fn selected_model(&self) -> String {
         self.selected_model.lock().unwrap().clone()
     }
 
-    /// Sets the active model if it is present in the configured list.
+    /// Sets the active model if it is present in the available list.
     /// Returns `false` when the model is unknown.
     pub fn set_selected_model(&self, model: impl Into<String>) -> bool {
         let model = model.into();
-        if !self.config.models.iter().any(|m| m == &model) {
+        let known = self.models.lock().unwrap().iter().any(|m| m == &model);
+        if !known {
             return false;
         }
         *self.selected_model.lock().unwrap() = model;

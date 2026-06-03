@@ -60,9 +60,20 @@
       button.secondary:hover {
         background: #047857;
       }
-      #runcopilot {
-        width: 100%;
-        margin-top: 6px;
+      .hint {
+        font-weight: 400;
+        font-size: 11px;
+        opacity: 0.7;
+      }
+      pre {
+        margin: 8px 0 0;
+        padding: 10px;
+        border-radius: 6px;
+        background: #0002;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: text;
       }
       .meta {
         margin-top: 16px;
@@ -98,10 +109,18 @@
       <button id="save">Save</button>
     </div>
 
-    <label for="model">Active model</label>
-    <select id="model"></select>
+    <label for="model">Active model <span id="modelhint" class="hint"></span></label>
+    <div class="row">
+      <select id="model"></select>
+      <button id="refresh">Refresh</button>
+    </div>
 
-    <button id="runcopilot" class="secondary">Run Copilot</button>
+    <label>Start Copilot</label>
+    <div class="row">
+      <button id="runcopilot" class="secondary">Run Copilot</button>
+      <button id="copycmds">Copy commands</button>
+    </div>
+    <pre id="cmds" title="Paste these into your own PowerShell"></pre>
 
     <div id="toast"></div>
 
@@ -124,14 +143,30 @@
         setTimeout(() => (el.textContent = ""), 2500);
       }
 
+      // Same env the "Run Copilot" button sets — offered for manual copy-paste.
+      const MODEL_LABEL = "copilot-proxy-model";
+      function commandsFor(listenAddr) {
+        return (
+          '$env:COPILOT_PROVIDER_BASE_URL="http://' + listenAddr + '"\n' +
+          '$env:COPILOT_MODEL="' + MODEL_LABEL + '"\n' +
+          "copilot"
+        );
+      }
+
       async function refresh() {
         const s = await invoke("get_state");
         $("endpoint").textContent = s.corporate_base_url;
         $("listen").textContent = s.listen_addr;
+        $("cmds").textContent = commandsFor(s.listen_addr);
 
         const keyEl = $("keystatus");
         keyEl.textContent = s.has_api_key ? "set" : "missing";
         keyEl.className = "badge " + (s.has_api_key ? "ok" : "warn");
+
+        $("modelhint").textContent =
+          s.models.length === 0
+            ? "— set API key, then Refresh"
+            : "(" + s.models.length + " available)";
 
         const select = $("model");
         // Don't clobber the dropdown while the user is interacting with it.
@@ -155,13 +190,30 @@
         }
       }
 
+      async function fetchModels(announce) {
+        try {
+          const models = await invoke("refresh_models");
+          if (announce) toast("Fetched " + models.length + " models.");
+          await refresh();
+        } catch (err) {
+          if (announce) toast(String(err), true);
+        }
+      }
+
       $("save").addEventListener("click", async () => {
         const key = $("apikey").value;
         await invoke("set_api_key", { key });
         $("apikey").value = "";
-        toast(key ? "API key saved." : "API key cleared.");
-        await refresh();
+        if (key) {
+          toast("API key saved — fetching models…");
+          await fetchModels(true); // auto-load models once the key is set
+        } else {
+          toast("API key cleared.");
+          await refresh();
+        }
       });
+
+      $("refresh").addEventListener("click", () => fetchModels(true));
 
       $("model").addEventListener("change", async (e) => {
         try {
@@ -178,6 +230,15 @@
           toast("Launched Copilot in a new terminal.");
         } catch (err) {
           toast(String(err), true);
+        }
+      });
+
+      $("copycmds").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText($("cmds").textContent);
+          toast("Commands copied to clipboard.");
+        } catch (err) {
+          toast("Copy failed — select the text manually.", true);
         }
       });
 

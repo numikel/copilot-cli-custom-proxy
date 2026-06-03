@@ -2,7 +2,7 @@ use axum::{
     body::{Body, Bytes},
     http::HeaderMap,
     response::Response,
-    routing::{any, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use proxy_core::{build_router, AppState, Config};
@@ -117,6 +117,50 @@ async fn forwards_non_json_body_unchanged() {
 
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().await.unwrap(), "not-json-payload");
+}
+
+#[tokio::test]
+async fn fetches_models_from_endpoint() {
+    async fn models() -> Json<serde_json::Value> {
+        Json(json!({ "object": "list", "data": [{ "id": "alpha" }, { "id": "beta" }] }))
+    }
+    let upstream = spawn(Router::new().route("/models", get(models))).await;
+
+    // Config without a static `models` list — relies entirely on fetching.
+    let config = Config::from_str(&format!(
+        r#"
+listen_addr = "127.0.0.1:0"
+corporate_base_url = "{upstream}"
+"#
+    ))
+    .unwrap();
+    let state = AppState::new(config);
+    state.set_api_key("k");
+
+    let fetched = proxy_core::fetch_models(&state).await.unwrap();
+    assert_eq!(fetched, vec!["alpha".to_string(), "beta".to_string()]);
+
+    // set_models adopts the first model as the selection when none is set.
+    state.set_models(fetched);
+    assert_eq!(state.selected_model(), "alpha");
+    assert!(state.set_selected_model("beta"));
+    assert!(!state.set_selected_model("unknown"));
+}
+
+#[tokio::test]
+async fn fetch_models_requires_api_key() {
+    let upstream = spawn(Router::new()).await;
+    let config = Config::from_str(&format!(
+        r#"
+listen_addr = "127.0.0.1:0"
+corporate_base_url = "{upstream}"
+"#
+    ))
+    .unwrap();
+    let state = AppState::new(config);
+
+    let err = proxy_core::fetch_models(&state).await.unwrap_err();
+    assert!(err.contains("API key"));
 }
 
 #[tokio::test]

@@ -11,9 +11,13 @@ pub struct Config {
     pub listen_addr: String,
     /// Base URL of the OpenAI-compatible corporate endpoint.
     pub corporate_base_url: String,
-    /// Model that is active at startup.
-    pub default_model: String,
-    /// Models available for switching in the tray menu.
+    /// Model that is active at startup. Optional — if omitted, the first
+    /// available model (static list or fetched from the endpoint) is used.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// Optional static list of models. If empty, the list is fetched from
+    /// `{corporate_base_url}/models` once an API key is set.
+    #[serde(default)]
     pub models: Vec<String>,
 }
 
@@ -53,14 +57,14 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.models.is_empty() {
-            return Err(ConfigError::Invalid("the `models` list is empty".into()));
-        }
-        if !self.models.iter().any(|m| m == &self.default_model) {
-            return Err(ConfigError::Invalid(format!(
-                "`default_model` (\"{}\") is not in the `models` list",
-                self.default_model
-            )));
+        // `models` may be empty — the list is then fetched from the endpoint.
+        // Only validate `default_model` membership when both are provided.
+        if let Some(default_model) = &self.default_model {
+            if !self.models.is_empty() && !self.models.iter().any(|m| m == default_model) {
+                return Err(ConfigError::Invalid(format!(
+                    "`default_model` (\"{default_model}\") is not in the `models` list"
+                )));
+            }
         }
         Ok(())
     }

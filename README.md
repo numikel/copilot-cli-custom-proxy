@@ -41,11 +41,15 @@ Copy `config.example.toml` to `config.toml` and fill in your own values:
 ```toml
 listen_addr = "127.0.0.1:8080"
 corporate_base_url = "https://your-endpoint.example.com/v1"
-default_model = "model-a"
-models = ["model-a", "model-b", "model-c"]
+# default_model and models are optional — see below
 ```
 
-`config.toml` is in `.gitignore` (it holds your private endpoint / model names).
+The **model list is fetched automatically** from `{corporate_base_url}/models`
+once you enter your API key (and via the tray's **"Refresh models"**). You can
+still pre-seed a static `models` list and a `default_model` in `config.toml` if
+you want them to appear before authenticating.
+
+`config.toml` is in `.gitignore` (it holds your private endpoint address).
 The app looks for `config.toml` next to the `.exe`, then in the working directory.
 
 ## Build and run (Windows)
@@ -65,6 +69,7 @@ cargo tauri build
 
 On launch the app minimizes to the tray. From the tray menu you can:
 - pick the active model (applied instantly),
+- **"Refresh models"** — re-fetch the model list from the endpoint,
 - **"Run Copilot"** — opens a new terminal with the proxy environment variables
   already set and starts `copilot`,
 - open **"Set API key…"** to paste your key,
@@ -75,11 +80,13 @@ On launch the app minimizes to the tray. From the tray menu you can:
 The easiest way is the **"Run Copilot"** button (tray or settings window) — it
 launches a terminal with the environment already pointed at the proxy.
 
-To do it manually:
+Alternatively, the settings window has a **"Copy commands"** button (and shows
+the commands as selectable text) so you can paste them into your own PowerShell —
+handy if `copilot` is not on the PATH of the launched shell:
 
 ```powershell
-set COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080
-set COPILOT_MODEL=copilot-proxy-model   # value is arbitrary — the proxy overrides it
+$env:COPILOT_PROVIDER_BASE_URL="http://127.0.0.1:8080"
+$env:COPILOT_MODEL="copilot-proxy-model"   # value is arbitrary — the proxy overrides it
 copilot
 ```
 

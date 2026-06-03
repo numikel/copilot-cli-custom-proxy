@@ -9,7 +9,7 @@ mod proxy;
 mod state;
 
 pub use config::{Config, ConfigError};
-pub use proxy::build_router;
+pub use proxy::{build_router, fetch_models};
 pub use state::{AppState, RequestLog};
 
 use std::sync::Arc;
