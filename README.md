@@ -126,6 +126,17 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 
 Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
 
+## Security
+
+- The API key is kept in memory only (wrapped in `secrecy::SecretString`):
+  never written to disk, never logged, never returned to the UI.
+- **Keep `listen_addr` on loopback** (`127.0.0.1`). The proxy injects your API
+  key into every forwarded request, so binding to a non-loopback address would
+  let anything on the network use your key. The app logs a warning if you do.
+- Use an `https://` endpoint — a non-HTTPS `corporate_base_url` sends the key
+  unencrypted (the app warns about this too).
+- The settings window loads only local, static assets under a restrictive CSP.
+
 ## Notes
 
 - **OpenAI-compatible** endpoints (Chat Completions API) are supported.

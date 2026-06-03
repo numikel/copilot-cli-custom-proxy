@@ -1,0 +1,157 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e0e11;
+  --card: #17171c;
+  --card-2: #1e1e25;
+  --border: #2a2a33;
+  --text: #e7e7ea;
+  --muted: #9a9aa6;
+  --accent: #6366f1;
+  --accent-soft: #6366f133;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 18px;
+  background: radial-gradient(1200px 400px at 50% -10%, #1b1b25, var(--bg));
+  color: var(--text);
+  font-size: 13.5px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #a855f7);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: white;
+}
+header h1 { font-size: 16px; margin: 0; flex: 1; }
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  display: inline-block; margin-right: 6px;
+}
+.dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot.off { background: var(--amber); }
+.pill {
+  font-size: 11px; color: var(--muted);
+  display: flex; align-items: center;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.card > .title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin-bottom: 10px; font-weight: 700;
+}
+
+.row { display: flex; gap: 8px; align-items: center; }
+input[type="text"], input[type="password"], input.search {
+  flex: 1; width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+}
+input:focus { border-color: var(--accent); }
+
+button {
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background .12s, border-color .12s, transform .04s;
+}
+button:hover { border-color: var(--accent); }
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button.primary:hover { background: #4f46e5; }
+button.green { background: var(--green); border-color: var(--green); color: #052e16; }
+button.green:hover { filter: brightness(1.05); }
+button.icon { padding: 9px 11px; }
+
+.filterbar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+}
+.toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+
+.modellist {
+  max-height: 190px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card-2);
+}
+.modellist::-webkit-scrollbar { width: 9px; }
+.modellist::-webkit-scrollbar-thumb { background: #34343f; border-radius: 8px; }
+.model {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.model:last-child { border-bottom: none; }
+.model:hover { background: #24242c; }
+.model.active { background: var(--accent-soft); }
+.model .check {
+  width: 16px; color: var(--accent); font-weight: 800; text-align: center;
+  visibility: hidden;
+}
+.model.active .check { visibility: visible; }
+.model .name { flex: 1; }
+.model.active .name { font-weight: 600; }
+.empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12px; }
+
+.actions { display: flex; gap: 8px; }
+.actions button { flex: 1; }
+
+pre {
+  margin: 10px 0 0; padding: 11px;
+  border-radius: 8px; background: #0b0b0e;
+  border: 1px solid var(--border);
+  font-size: 12px; color: #c8c8d4;
+  white-space: pre-wrap; word-break: break-all;
+  -webkit-user-select: text; user-select: text;
+}
+
+.meta {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 10px;
+  font-size: 11.5px; color: var(--muted);
+}
+.meta .k { color: #74747f; }
+.meta .v { color: var(--text); word-break: break-all; }
+.badge { font-weight: 700; }
+.ok { color: var(--green); }
+.warn { color: var(--amber); }
+
+#toast {
+  position: sticky; bottom: 0;
+  min-height: 16px; font-size: 12px; margin-top: 4px; font-weight: 600;
+}
