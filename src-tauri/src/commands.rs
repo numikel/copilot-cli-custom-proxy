@@ -11,6 +11,8 @@ pub struct StateView {
     pub has_api_key: bool,
     pub listen_addr: String,
     pub corporate_base_url: String,
+    /// OpenAI-compatible APIs the upstream serves (gates launchable agents).
+    pub upstream_apis: Vec<String>,
     /// Live snapshot of forwarded traffic, so the UI can show what Copilot hits.
     pub request_log: RequestLog,
 }
@@ -23,6 +25,7 @@ pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
         has_api_key: state.has_api_key(),
         listen_addr: state.config.listen_addr.clone(),
         corporate_base_url: state.config.corporate_base_url.clone(),
+        upstream_apis: state.config.upstream_apis.clone(),
         request_log: state.request_log(),
     }
 }
@@ -67,19 +70,84 @@ pub enum Agent {
 }
 
 impl Agent {
+    /// All agents the launcher knows about.
+    pub const ALL: &'static [Agent] = &[Agent::Copilot, Agent::Codex];
+
     /// Parses the agent id sent from the UI / tray (e.g. "copilot", "codex").
     pub fn from_id(id: &str) -> Option<Agent> {
-        match id {
-            "copilot" => Some(Agent::Copilot),
-            "codex" => Some(Agent::Codex),
-            _ => None,
+        Agent::ALL.iter().copied().find(|a| a.id() == id)
+    }
+
+    /// Stable id used by the UI / tray and in `run::<id>` menu ids.
+    pub fn id(self) -> &'static str {
+        match self {
+            Agent::Copilot => "copilot",
+            Agent::Codex => "codex",
         }
     }
+
+    /// Human-friendly name shown on buttons / menu entries.
+    pub fn label(self) -> &'static str {
+        match self {
+            Agent::Copilot => "Copilot",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    /// The OpenAI-compatible API this agent talks. The agent can only be
+    /// launched when the configured upstream serves this API.
+    pub fn api(self) -> &'static str {
+        match self {
+            Agent::Copilot => "chat",
+            Agent::Codex => "responses",
+        }
+    }
+}
+
+/// Agent descriptor sent to the UI, with availability resolved against the
+/// upstream APIs declared in the configuration.
+#[derive(Serialize)]
+pub struct AgentInfo {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub api: &'static str,
+    /// True when the configured upstream serves this agent's API.
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub fn list_agents(state: State<'_, Arc<AppState>>) -> Vec<AgentInfo> {
+    Agent::ALL
+        .iter()
+        .map(|&agent| AgentInfo {
+            id: agent.id(),
+            label: agent.label(),
+            api: agent.api(),
+            enabled: agent_supported(&state, agent),
+        })
+        .collect()
+}
+
+/// Whether the configured upstream serves the API this agent needs.
+pub(crate) fn agent_supported(state: &AppState, agent: Agent) -> bool {
+    state
+        .config
+        .upstream_apis
+        .iter()
+        .any(|a| a.as_str() == agent.api())
 }
 
 #[tauri::command]
 pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), String> {
     let kind = Agent::from_id(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
+    if !agent_supported(&state, kind) {
+        return Err(format!(
+            "{} needs a \"{}\" endpoint, but the upstream serves: {:?}",
+            kind.label(),
+            kind.api(),
+            state.config.upstream_apis
+        ));
+    }
     launch_agent(&state, kind)
 }
 

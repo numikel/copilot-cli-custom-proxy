@@ -34,8 +34,7 @@
     <div class="card">
       <div class="title">Start agent</div>
       <div class="actions">
-        <button id="runcopilot" class="green">▶ Run Copilot</button>
-        <button id="runcodex" class="green">▶ Run Codex</button>
+        <span id="agentbtns"></span>
         <button id="copycmds">⧉ Copy commands</button>
       </div>
       <pre id="cmds" title="Paste these into your own PowerShell"></pre>
@@ -46,6 +45,7 @@
       <div class="meta">
         <span class="k">API key</span><span class="v"><span id="keystatus" class="badge"></span></span>
         <span class="k">Endpoint</span><span class="v" id="endpoint"></span>
+        <span class="k">APIs</span><span class="v" id="apis"></span>
         <span class="k">Listening</span><span class="v" id="listen"></span>
         <span class="k">Forwarded</span><span class="v"><span id="reqcount" class="badge">0</span> requests</span>
         <span class="k">Last</span><span class="v" id="lastreq">—</span>

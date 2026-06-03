@@ -41,6 +41,7 @@ Copy `config.example.toml` to `config.toml` and fill in your own values:
 ```toml
 listen_addr = "127.0.0.1:8080"
 corporate_base_url = "https://your-endpoint.example.com/v1"
+upstream_apis = ["chat"]   # which APIs the endpoint serves — see below
 # default_model and models are optional — see below
 ```
 
@@ -48,6 +49,22 @@ The **model list is fetched automatically** from `{corporate_base_url}/models`
 once you enter your API key (and via the tray's **"Refresh models"**). You can
 still pre-seed a static `models` list and a `default_model` in `config.toml` if
 you want them to appear before authenticating.
+
+### Which agents you can launch (`upstream_apis`)
+
+Different CLI agents speak different OpenAI-compatible APIs, so the app only
+offers to launch the ones your endpoint can actually serve. Declare what your
+endpoint supports:
+
+| Value | Path | Agents |
+|-------|------|--------|
+| `"chat"` | `/chat/completions` | GitHub Copilot CLI |
+| `"responses"` | `/responses` | Codex CLI |
+
+List every API your endpoint serves, e.g. `upstream_apis = ["chat", "responses"]`
+for OpenAI/Azure, or just `["chat"]` for a plain Ollama server. Agents whose API
+isn't listed are shown disabled (settings window) or hidden (tray), so you never
+point a CLI at an endpoint that can't answer it.
 
 `config.toml` is in `.gitignore` (it holds your private endpoint address).
 The app looks for `config.toml` next to the `.exe`, then in the working directory.
@@ -111,9 +128,11 @@ codex -c model_provider=proxy `
 
 > **Important:** since February 2026 Codex speaks **only the Responses API**
 > (`wire_api = "responses"`); the `chat` wire API was removed. Your
-> `corporate_base_url` must therefore expose `/responses`. Chat-only upstreams
-> (e.g. a plain Ollama server) won't work with Codex without a Responses→Chat
-> translation proxy — that bridge is out of scope for now.
+> `corporate_base_url` must therefore expose `/responses` — declare it with
+> `upstream_apis = ["responses"]` (or `["chat", "responses"]`). If you don't,
+> **"Run Codex" is disabled**, so you never point Codex at an endpoint that
+> can't answer it. Chat-only upstreams (e.g. a plain Ollama server) would need a
+> Responses→Chat translation proxy, which is out of scope for now.
 
 ### Verifying what Copilot really talks to
 
