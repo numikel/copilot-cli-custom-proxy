@@ -1,8 +1,8 @@
-//! Rdzeń lokalnego proxy dla GitHub Copilot CLI.
+//! Core of the local proxy for GitHub Copilot CLI.
 //!
-//! Crate jest niezależny od Tauri/GUI — zawiera całą logikę forwardowania
-//! żądań (podmiana modelu, wstrzyknięcie klucza API, streaming odpowiedzi),
-//! dzięki czemu da się go w pełni testować na dowolnej platformie.
+//! This crate is independent of Tauri/GUI — it contains all the request
+//! forwarding logic (model swap, API key injection, response streaming),
+//! so it can be fully tested on any platform.
 
 mod config;
 mod proxy;
@@ -14,11 +14,11 @@ pub use state::AppState;
 
 use std::sync::Arc;
 
-/// Uruchamia serwer proxy na adresie z konfiguracji. Blokuje do zakończenia.
+/// Runs the proxy server on the address from the configuration. Blocks until it ends.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
     let addr = state.config.listen_addr.clone();
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("proxy nasłuchuje na http://{addr}");
+    tracing::info!("proxy listening on http://{addr}");
     let router = build_router(state);
     axum::serve(listener, router).await
 }

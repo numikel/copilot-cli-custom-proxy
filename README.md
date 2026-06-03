@@ -65,8 +65,8 @@ cargo tauri build
 
 On launch the app minimizes to the tray. From the tray menu you can:
 - pick the active model (applied instantly),
-- open **"Ustaw klucz API…"** (Set API key) to paste your key,
-- choose "Zakończ" (Quit) to exit.
+- open **"Set API key…"** to paste your key,
+- choose **"Quit"** to exit.
 
 ## Configuring GitHub Copilot CLI
 

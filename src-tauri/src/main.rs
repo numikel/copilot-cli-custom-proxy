@@ -1,4 +1,4 @@
-// Na Windows w trybie release ukrywa konsolę — aplikacja żyje w trayu.
+// On Windows in release mode hides the console — the app lives in the tray.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod commands;
@@ -8,8 +8,8 @@ use proxy_core::{AppState, Config};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Lokalizacje, w których szukamy `config.toml`: obok pliku wykonywalnego,
-/// a następnie w bieżącym katalogu roboczym.
+/// Locations searched for `config.toml`: next to the executable,
+/// then in the current working directory.
 fn config_candidates() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -29,14 +29,14 @@ fn load_config() -> Config {
         }
         match Config::load(path) {
             Ok(config) => {
-                tracing::info!("wczytano konfigurację z {}", path.display());
+                tracing::info!("loaded configuration from {}", path.display());
                 return config;
             }
             Err(e) => panic!("{} ({})", e, path.display()),
         }
     }
     panic!(
-        "nie znaleziono config.toml — skopiuj config.example.toml do config.toml. Sprawdzone ścieżki: {:?}",
+        "config.toml not found — copy config.example.toml to config.toml. Checked paths: {:?}",
         candidates
     );
 }
@@ -62,23 +62,23 @@ fn main() {
             commands::set_model
         ])
         .setup(move |app| {
-            // Serwer proxy startuje w tle, na adresie z konfiguracji.
+            // The proxy server starts in the background, on the address from the config.
             let serve_state = proxy_state.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = proxy_core::serve(serve_state).await {
-                    tracing::error!("serwer proxy zakończył działanie: {e}");
+                    tracing::error!("proxy server stopped: {e}");
                 }
             });
             tray::build_tray(app, tray_state.clone())?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Zamknięcie okna ustawień tylko je chowa — aplikacja zostaje w trayu.
+            // Closing the settings window only hides it — the app stays in the tray.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
             }
         })
         .run(tauri::generate_context!())
-        .expect("błąd uruchomienia aplikacji Tauri");
+        .expect("failed to run the Tauri application");
 }

@@ -7,7 +7,7 @@ Cargo.lock
 /src-tauri/gen
 /src-tauri/target
 
-# Local runtime config — może zawierać prywatny adres endpointu / nazwy modeli
+# Local runtime config — may contain a private endpoint address / model names
 /config.toml
 
 # Misc

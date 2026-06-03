@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
-/// Widok stanu przekazywany do UI (bez ujawniania samego klucza API).
+/// State view passed to the UI (without exposing the API key itself).
 #[derive(Serialize)]
 pub struct StateView {
     pub models: Vec<String>,
@@ -34,6 +34,6 @@ pub fn set_model(state: State<'_, Arc<AppState>>, model: String) -> Result<(), S
     if state.set_selected_model(model.clone()) {
         Ok(())
     } else {
-        Err(format!("nieznany model: {model}"))
+        Err(format!("unknown model: {model}"))
     }
 }

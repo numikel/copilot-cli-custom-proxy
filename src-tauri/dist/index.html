@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Copilot Proxy — Ustawienia</title>
+    <title>Copilot Proxy — Settings</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -82,21 +82,21 @@
   <body>
     <h1>Copilot Proxy</h1>
 
-    <label for="apikey">Klucz API (trzymany tylko w pamięci)</label>
+    <label for="apikey">API key (kept in memory only)</label>
     <div class="row">
-      <input id="apikey" type="password" placeholder="wklej klucz API…" autocomplete="off" />
-      <button id="save">Zapisz</button>
+      <input id="apikey" type="password" placeholder="paste your API key…" autocomplete="off" />
+      <button id="save">Save</button>
     </div>
 
-    <label for="model">Aktywny model</label>
+    <label for="model">Active model</label>
     <select id="model"></select>
 
     <div id="toast"></div>
 
     <div class="meta">
-      Status klucza: <span id="keystatus" class="badge"></span><br />
+      Key status: <span id="keystatus" class="badge"></span><br />
       Endpoint: <span id="endpoint"></span><br />
-      Nasłuch proxy: <span id="listen"></span>
+      Proxy listening on: <span id="listen"></span>
     </div>
 
     <script>
@@ -116,7 +116,7 @@
         $("listen").textContent = s.listen_addr;
 
         const keyEl = $("keystatus");
-        keyEl.textContent = s.has_api_key ? "ustawiony" : "brak";
+        keyEl.textContent = s.has_api_key ? "set" : "missing";
         keyEl.className = "badge " + (s.has_api_key ? "ok" : "warn");
 
         const select = $("model");
@@ -134,14 +134,14 @@
         const key = $("apikey").value;
         await invoke("set_api_key", { key });
         $("apikey").value = "";
-        toast(key ? "Klucz API zapisany." : "Klucz API wyczyszczony.");
+        toast(key ? "API key saved." : "API key cleared.");
         await refresh();
       });
 
       $("model").addEventListener("change", async (e) => {
         try {
           await invoke("set_model", { model: e.target.value });
-          toast("Przełączono model na " + e.target.value + ".");
+          toast("Switched model to " + e.target.value + ".");
         } catch (err) {
           toast(String(err), true);
         }

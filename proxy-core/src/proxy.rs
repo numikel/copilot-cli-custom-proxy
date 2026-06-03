@@ -10,10 +10,10 @@ use axum::{
 use secrecy::ExposeSecret;
 use std::sync::Arc;
 
-/// Maksymalny rozmiar buforowanego body żądania (100 MB).
+/// Maximum buffered request body size (100 MB).
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
-/// Nagłówki hop-by-hop oraz te, które wyznaczamy samodzielnie — nie forwardujemy ich.
+/// Hop-by-hop headers plus the ones we set ourselves — never forwarded.
 const SKIPPED_REQUEST_HEADERS: &[&str] = &[
     "host",
     "content-length",
@@ -24,7 +24,7 @@ const SKIPPED_REQUEST_HEADERS: &[&str] = &[
     "keep-alive",
 ];
 
-/// Nagłówki odpowiedzi, które ustawia warstwa transportowa — nie przepisujemy ich.
+/// Response headers set by the transport layer — not copied back.
 const SKIPPED_RESPONSE_HEADERS: &[&str] = &[
     "content-length",
     "transfer-encoding",
@@ -32,7 +32,7 @@ const SKIPPED_RESPONSE_HEADERS: &[&str] = &[
     "keep-alive",
 ];
 
-/// Buduje router Axum: dowolna ścieżka/metoda trafia do transparentnego proxy.
+/// Builds the Axum router: any path/method goes to the transparent proxy.
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .fallback(any(proxy_handler))
@@ -54,18 +54,18 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
         Err(e) => {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                format!("nie udało się odczytać treści żądania: {e}"),
+                format!("failed to read request body: {e}"),
             )
         }
     };
 
-    // Klucz API musi być ustawiony w UI — trzymany tylko w pamięci.
+    // The API key must be set in the UI — kept in memory only.
     let api_key = match state.api_key() {
         Some(k) => k,
         None => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
-                "Klucz API nie został ustawiony. Otwórz okno ustawień aplikacji i wprowadź klucz."
+                "API key is not set. Open the app's settings window and enter your key."
                     .to_string(),
             )
         }
@@ -76,17 +76,17 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
         Err(_) => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
-                "Klucz API zawiera niedozwolone znaki.".to_string(),
+                "API key contains invalid characters.".to_string(),
             )
         }
     };
 
-    // Podmiana pola `model` na model wybrany w trayu.
+    // Replace the `model` field with the model selected in the tray.
     let outgoing_body = inject_model(&body_bytes, &state.selected_model());
 
     let target_url = format!("{}{}", state.config.base_url_trimmed(), path_and_query);
 
-    // Forwardujemy oryginalne nagłówki poza pomijanymi; Authorization nadpisujemy.
+    // Forward the original headers except the skipped ones; override Authorization.
     let mut forward_headers = HeaderMap::new();
     for (name, value) in req_headers.iter() {
         if SKIPPED_REQUEST_HEADERS.contains(&name.as_str()) {
@@ -108,13 +108,13 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
         Ok(resp) => build_streaming_response(resp),
         Err(e) => error_response(
             StatusCode::BAD_GATEWAY,
-            format!("nie udało się połączyć z endpointem: {e}"),
+            format!("failed to reach the endpoint: {e}"),
         ),
     }
 }
 
-/// Zamienia pole `model` w JSON-owym body, jeśli istnieje. W przeciwnym razie
-/// (puste body, nie-JSON, brak pola `model`) przekazuje treść bez zmian.
+/// Replaces the `model` field in a JSON body if present. Otherwise (empty body,
+/// non-JSON, or no `model` field) passes the body through unchanged.
 fn inject_model(body: &[u8], model: &str) -> Bytes {
     if body.is_empty() {
         return Bytes::new();
@@ -138,8 +138,8 @@ fn inject_model(body: &[u8], model: &str) -> Bytes {
     }
 }
 
-/// Przepisuje odpowiedź upstreamu do klienta jako strumień (obsługa SSE/streamingu),
-/// zachowując status i nagłówki poza tymi z warstwy transportowej.
+/// Pipes the upstream response back to the client as a stream (SSE/streaming
+/// support), preserving the status and headers except the transport-layer ones.
 fn build_streaming_response(resp: reqwest::Response) -> Response {
     let status = resp.status();
     let headers = resp.headers().clone();

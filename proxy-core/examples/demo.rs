@@ -1,10 +1,10 @@
-//! Uruchamialny pokaz działania proxy bez GUI.
+//! A runnable demonstration of the proxy without a GUI.
 //!
-//! Startuje atrapę upstreamu (odsyła to, co zobaczyła), uruchamia proxy
-//! z modelem "model-b" i kluczem "DEMO-KEY", po czym wysyła żądanie z
-//! `model: "gpt-original"` i wypisuje, co dotarło na upstream.
+//! Starts an upstream stub (echoes what it saw), runs the proxy with model
+//! "model-b" and key "DEMO-KEY", then sends a request with `model:
+//! "gpt-original"` and prints what arrived at the upstream.
 //!
-//! Uruchom: `cargo run -p proxy-core --example demo`
+//! Run with: `cargo run -p proxy-core --example demo`
 
 use axum::{http::HeaderMap, routing::post, Json, Router};
 use proxy_core::{build_router, AppState, Config};
@@ -15,7 +15,7 @@ async fn echo(headers: HeaderMap, body: axum::body::Bytes) -> Json<serde_json::V
     let parsed: serde_json::Value =
         serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     Json(json!({
-        "model_widziany_przez_endpoint": parsed.get("model"),
+        "model_seen_by_endpoint": parsed.get("model"),
         "authorization": headers.get("authorization").and_then(|v| v.to_str().ok()),
     }))
 }
@@ -31,11 +31,11 @@ async fn spawn(router: Router) -> String {
 
 #[tokio::main]
 async fn main() {
-    // 1) Atrapa korporacyjnego endpointu.
+    // 1) Stub of the corporate endpoint.
     let upstream = spawn(Router::new().route("/chat/completions", post(echo))).await;
-    println!("Atrapa endpointu (CORPORATE_URL): {upstream}");
+    println!("Endpoint stub (CORPORATE_URL): {upstream}");
 
-    // 2) Proxy z modelem i kluczem ustawionymi tak, jak zrobiłoby to UI.
+    // 2) Proxy with the model and key set as the UI would set them.
     let config = Config::from_str(&format!(
         r#"
 listen_addr = "127.0.0.1:0"
@@ -51,8 +51,8 @@ models = ["model-a", "model-b"]
     let proxy = spawn(build_router(state)).await;
     println!("Proxy (COPILOT_PROVIDER_BASE_URL): {proxy}");
 
-    // 3) Żądanie jak z Copilot CLI — model "gpt-original".
-    println!("\n--> Wysyłam do proxy: {{ \"model\": \"gpt-original\", ... }}");
+    // 3) Request as if from Copilot CLI — model "gpt-original".
+    println!("\n--> Sending to proxy: {{ \"model\": \"gpt-original\", ... }}");
     let resp = reqwest::Client::new()
         .post(format!("{proxy}/chat/completions"))
         .json(&json!({ "model": "gpt-original", "messages": [] }))
@@ -61,6 +61,6 @@ models = ["model-a", "model-b"]
         .unwrap();
 
     let seen: serde_json::Value = resp.json().await.unwrap();
-    println!("\n<-- Co naprawdę dotarło na endpoint:");
+    println!("\n<-- What actually arrived at the endpoint:");
     println!("{}", serde_json::to_string_pretty(&seen).unwrap());
 }

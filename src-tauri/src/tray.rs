@@ -7,11 +7,11 @@ use tauri::{
 };
 
 fn status_text(model: &str) -> String {
-    format!("Aktywny model: {model}")
+    format!("Active model: {model}")
 }
 
-/// Buduje ikonę w zasobniku z menu: status, lista modeli (przełączniki),
-/// otwarcie ustawień i wyjście.
+/// Builds the tray icon with a menu: status, model list (toggles),
+/// open settings, and quit.
 pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
     let handle = app.handle();
     let selected = state.selected_model();
@@ -37,8 +37,8 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
         model_items.push(item);
     }
 
-    let settings = MenuItem::with_id(handle, "settings", "Ustaw klucz API…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(handle, "quit", "Zakończ", true, None::<&str>)?;
+    let settings = MenuItem::with_id(handle, "settings", "Set API key…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::new(handle)?;
     menu.append(&status)?;
@@ -53,7 +53,7 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
     let icon = app
         .default_window_icon()
         .cloned()
-        .expect("brak domyślnej ikony aplikacji (sprawdź bundle.icon w tauri.conf.json)");
+        .expect("missing default app icon (check bundle.icon in tauri.conf.json)");
 
     let model_items_handler = model_items.clone();
     let status_handler = status.clone();

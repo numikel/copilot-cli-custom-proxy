@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "settings",
-        "title": "Copilot Proxy — Ustawienia",
+        "title": "Copilot Proxy — Settings",
         "width": 460,
         "height": 380,
         "resizable": true,

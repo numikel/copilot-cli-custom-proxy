@@ -9,7 +9,7 @@ use proxy_core::{build_router, AppState, Config};
 use serde_json::json;
 use std::sync::Arc;
 
-/// Uruchamia podany router na losowym porcie i zwraca jego bazowy URL.
+/// Runs the given router on a random port and returns its base URL.
 async fn spawn(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -19,7 +19,7 @@ async fn spawn(router: Router) -> String {
     format!("http://{addr}")
 }
 
-/// Upstream-atrapa: odsyła to, co zobaczyła (model, nagłówki).
+/// Upstream stub: echoes back what it saw (model, headers).
 async fn echo(headers: HeaderMap, body: Bytes) -> Json<serde_json::Value> {
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     Json(json!({
@@ -64,13 +64,13 @@ async fn replaces_model_and_injects_auth() {
     assert_eq!(resp.status(), 200);
     let v: serde_json::Value = resp.json().await.unwrap();
 
-    // model podmieniony na wybrany w trayu
+    // model replaced with the one selected in the tray
     assert_eq!(v["model"], "model-b");
-    // Authorization nadpisany kluczem z pamięci
+    // Authorization overridden with the in-memory key
     assert_eq!(v["authorization"], "Bearer test-key");
-    // oryginalne (niefiltrowane) nagłówki forwardowane
+    // original (non-filtered) headers are forwarded
     assert_eq!(v["x_test"], "hello");
-    // Host wskazuje na upstream, a nie na proxy (oryginalny Host niewysłany)
+    // Host points at the upstream, not the proxy (original Host not sent)
     let upstream_authority = upstream.trim_start_matches("http://");
     assert_eq!(v["host"], upstream_authority);
 }
@@ -79,7 +79,7 @@ async fn replaces_model_and_injects_auth() {
 async fn missing_api_key_returns_502() {
     let upstream = spawn(Router::new().route("/chat/completions", post(echo))).await;
 
-    // klucz API celowo nieustawiony
+    // API key intentionally not set
     let state = Arc::new(AppState::new(config_for(&upstream)));
     let proxy = spawn(build_router(state)).await;
 

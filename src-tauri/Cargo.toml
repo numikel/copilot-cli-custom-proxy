@@ -3,7 +3,7 @@ name = "copilot-proxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Lokalne proxy dla GitHub Copilot CLI z przełączaniem modelu w trayu"
+description = "Local proxy for GitHub Copilot CLI with in-tray model switching"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
