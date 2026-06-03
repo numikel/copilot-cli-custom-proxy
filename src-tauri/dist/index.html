@@ -54,6 +54,16 @@
       button:hover {
         background: #4338ca;
       }
+      button.secondary {
+        background: #059669;
+      }
+      button.secondary:hover {
+        background: #047857;
+      }
+      #runcopilot {
+        width: 100%;
+        margin-top: 6px;
+      }
       .meta {
         margin-top: 16px;
         padding-top: 12px;
@@ -91,12 +101,16 @@
     <label for="model">Active model</label>
     <select id="model"></select>
 
+    <button id="runcopilot" class="secondary">Run Copilot</button>
+
     <div id="toast"></div>
 
     <div class="meta">
       Key status: <span id="keystatus" class="badge"></span><br />
       Endpoint: <span id="endpoint"></span><br />
-      Proxy listening on: <span id="listen"></span>
+      Proxy listening on: <span id="listen"></span><br />
+      Requests forwarded: <span id="reqcount" class="badge">0</span><br />
+      Last request: <span id="lastreq">—</span>
     </div>
 
     <script>
@@ -120,13 +134,24 @@
         keyEl.className = "badge " + (s.has_api_key ? "ok" : "warn");
 
         const select = $("model");
-        select.innerHTML = "";
-        for (const m of s.models) {
-          const opt = document.createElement("option");
-          opt.value = m;
-          opt.textContent = m;
-          if (m === s.selected_model) opt.selected = true;
-          select.appendChild(opt);
+        // Don't clobber the dropdown while the user is interacting with it.
+        if (document.activeElement !== select) {
+          select.innerHTML = "";
+          for (const m of s.models) {
+            const opt = document.createElement("option");
+            opt.value = m;
+            opt.textContent = m;
+            if (m === s.selected_model) opt.selected = true;
+            select.appendChild(opt);
+          }
+        }
+
+        const log = s.request_log;
+        $("reqcount").textContent = log.count;
+        if (log.count > 0) {
+          const status = log.last_status === null ? "pending" : log.last_status;
+          $("lastreq").textContent =
+            log.last_model + " → " + log.last_target + " (" + status + ")";
         }
       }
 
@@ -147,7 +172,18 @@
         }
       });
 
+      $("runcopilot").addEventListener("click", async () => {
+        try {
+          await invoke("run_copilot");
+          toast("Launched Copilot in a new terminal.");
+        } catch (err) {
+          toast(String(err), true);
+        }
+      });
+
       refresh();
+      // Poll so forwarded-traffic stats update live while you use Copilot.
+      setInterval(refresh, 1500);
     </script>
   </body>
 </html>

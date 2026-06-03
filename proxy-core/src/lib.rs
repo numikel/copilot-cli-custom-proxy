@@ -10,7 +10,7 @@ mod state;
 
 pub use config::{Config, ConfigError};
 pub use proxy::build_router;
-pub use state::AppState;
+pub use state::{AppState, RequestLog};
 
 use std::sync::Arc;
 

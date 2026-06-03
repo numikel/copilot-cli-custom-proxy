@@ -1,6 +1,23 @@
 use crate::config::Config;
 use secrecy::SecretString;
+use serde::Serialize;
 use std::sync::Mutex;
+
+/// A snapshot of recent proxy traffic, surfaced in the UI so you can verify
+/// what the proxy actually forwards (and to where).
+#[derive(Clone, Default, Serialize)]
+pub struct RequestLog {
+    /// Number of requests forwarded since startup.
+    pub count: u64,
+    /// Model substituted into the most recent request.
+    pub last_model: String,
+    /// Path of the most recent request (e.g. "/chat/completions").
+    pub last_path: String,
+    /// Full upstream URL the most recent request was sent to.
+    pub last_target: String,
+    /// HTTP status returned by the upstream for the most recent request.
+    pub last_status: Option<u16>,
+}
 
 /// State shared between the proxy server and the UI (tray / settings window).
 ///
@@ -14,6 +31,8 @@ pub struct AppState {
     /// API key — in memory only, wrapped in `SecretString`
     /// (zeroized on drop, redacted in logs).
     api_key: Mutex<Option<SecretString>>,
+    /// Rolling record of forwarded requests for live verification in the UI.
+    request_log: Mutex<RequestLog>,
     /// Shared HTTP client used to forward requests upstream.
     pub http: reqwest::Client,
 }
@@ -25,6 +44,7 @@ impl AppState {
             config,
             selected_model: Mutex::new(selected_model),
             api_key: Mutex::new(None),
+            request_log: Mutex::new(RequestLog::default()),
             http: reqwest::Client::new(),
         }
     }
@@ -63,5 +83,25 @@ impl AppState {
     /// Returns `None` when no key has been set.
     pub fn api_key(&self) -> Option<SecretString> {
         self.api_key.lock().unwrap().clone()
+    }
+
+    /// Records an outgoing request (before the upstream status is known).
+    pub fn record_request(&self, model: &str, path: &str, target: &str) {
+        let mut log = self.request_log.lock().unwrap();
+        log.count += 1;
+        log.last_model = model.to_string();
+        log.last_path = path.to_string();
+        log.last_target = target.to_string();
+        log.last_status = None;
+    }
+
+    /// Records the upstream HTTP status for the most recent request.
+    pub fn record_status(&self, status: u16) {
+        self.request_log.lock().unwrap().last_status = Some(status);
+    }
+
+    /// Returns a snapshot of recent traffic for display in the UI.
+    pub fn request_log(&self) -> RequestLog {
+        self.request_log.lock().unwrap().clone()
     }
 }

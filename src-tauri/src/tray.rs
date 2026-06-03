@@ -37,6 +37,7 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
         model_items.push(item);
     }
 
+    let run_copilot = MenuItem::with_id(handle, "run_copilot", "Run Copilot", true, None::<&str>)?;
     let settings = MenuItem::with_id(handle, "settings", "Set API key…", true, None::<&str>)?;
     let quit = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
 
@@ -47,6 +48,7 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
         menu.append(item)?;
     }
     menu.append(&PredefinedMenuItem::separator(handle)?)?;
+    menu.append(&run_copilot)?;
     menu.append(&settings)?;
     menu.append(&quit)?;
 
@@ -67,6 +69,10 @@ pub fn build_tray(app: &App, state: Arc<AppState>) -> tauri::Result<()> {
             let id = event.id().as_ref().to_string();
             if id == "quit" {
                 app.exit(0);
+            } else if id == "run_copilot" {
+                if let Err(e) = crate::commands::launch_copilot(&state_handler) {
+                    tracing::error!("failed to launch Copilot: {e}");
+                }
             } else if id == "settings" {
                 if let Some(window) = app.get_webview_window("settings") {
                     let _ = window.show();

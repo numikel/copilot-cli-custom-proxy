@@ -59,7 +59,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::set_api_key,
-            commands::set_model
+            commands::set_model,
+            commands::run_copilot
         ])
         .setup(move |app| {
             // The proxy server starts in the background, on the address from the config.

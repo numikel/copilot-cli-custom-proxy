@@ -82,9 +82,20 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
     };
 
     // Replace the `model` field with the model selected in the tray.
-    let outgoing_body = inject_model(&body_bytes, &state.selected_model());
+    let model = state.selected_model();
+    let outgoing_body = inject_model(&body_bytes, &model);
 
     let target_url = format!("{}{}", state.config.base_url_trimmed(), path_and_query);
+
+    // Record + log so you can see exactly what the proxy forwards and to where.
+    state.record_request(&model, path_and_query, &target_url);
+    tracing::info!(
+        method = %method,
+        path = %path_and_query,
+        model = %model,
+        target = %target_url,
+        "forwarding request"
+    );
 
     // Forward the original headers except the skipped ones; override Authorization.
     let mut forward_headers = HeaderMap::new();
@@ -105,7 +116,12 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
         .await;
 
     match upstream {
-        Ok(resp) => build_streaming_response(resp),
+        Ok(resp) => {
+            let status = resp.status();
+            state.record_status(status.as_u16());
+            tracing::info!(status = %status, model = %model, "upstream responded");
+            build_streaming_response(resp)
+        }
         Err(e) => error_response(
             StatusCode::BAD_GATEWAY,
             format!("failed to reach the endpoint: {e}"),

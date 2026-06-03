@@ -65,22 +65,40 @@ cargo tauri build
 
 On launch the app minimizes to the tray. From the tray menu you can:
 - pick the active model (applied instantly),
+- **"Run Copilot"** — opens a new terminal with the proxy environment variables
+  already set and starts `copilot`,
 - open **"Set API key…"** to paste your key,
 - choose **"Quit"** to exit.
 
 ## Configuring GitHub Copilot CLI
 
-Point Copilot at the local proxy as its endpoint (the `openai` type is the default):
+The easiest way is the **"Run Copilot"** button (tray or settings window) — it
+launches a terminal with the environment already pointed at the proxy.
+
+To do it manually:
 
 ```powershell
 set COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080
-set COPILOT_MODEL=placeholder   # replaced by the proxy anyway
+set COPILOT_MODEL=copilot-proxy-model   # value is arbitrary — the proxy overrides it
 copilot
 ```
 
 `COPILOT_PROVIDER_API_KEY` is not needed — the proxy injects the key from memory.
 Use `http://127.0.0.1:8080` without `/v1`: Copilot appends `/chat/completions`,
 and the proxy forwards that path to `corporate_base_url`.
+
+### Verifying what Copilot really talks to
+
+The proxy logs every forwarded request (model + target URL + status). In dev
+mode (`cargo tauri dev`) you see them in the console, e.g.:
+
+```
+INFO forwarding request method=POST path=/chat/completions model=model-b target=https://your-endpoint.example.com/v1/chat/completions
+INFO upstream responded status=200 OK model=model-b
+```
+
+The settings window also shows a live **"Requests forwarded"** counter and the
+**last request** (model → endpoint → status), which works in release builds too.
 
 ## Tests and demo (run on any platform)
 
