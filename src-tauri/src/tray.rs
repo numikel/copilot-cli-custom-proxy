@@ -43,7 +43,7 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "refresh_models", "Refresh models", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "run_copilot", "Run Copilot", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "settings", "Set API key…", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "settings", "Open Settings…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
     Ok(menu)

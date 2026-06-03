@@ -6,145 +6,230 @@
     <title>Copilot Proxy — Settings</title>
     <style>
       :root {
-        color-scheme: light dark;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        color-scheme: dark;
+        --bg: #0e0e11;
+        --card: #17171c;
+        --card-2: #1e1e25;
+        --border: #2a2a33;
+        --text: #e7e7ea;
+        --muted: #9a9aa6;
+        --accent: #6366f1;
+        --accent-soft: #6366f133;
+        --green: #22c55e;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 20px;
-        font-size: 14px;
+        padding: 18px;
+        background: radial-gradient(1200px 400px at 50% -10%, #1b1b25, var(--bg));
+        color: var(--text);
+        font-size: 13.5px;
+        -webkit-user-select: none;
+        user-select: none;
       }
-      h1 {
-        font-size: 16px;
-        margin: 0 0 14px;
-      }
-      label {
-        display: block;
-        font-weight: 600;
-        margin: 12px 0 4px;
-      }
-      input,
-      select {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 8px;
-        border: 1px solid #8884;
-        border-radius: 6px;
-        background: #0001;
-        font-size: 14px;
-      }
-      .row {
+      header {
         display: flex;
-        gap: 8px;
-        align-items: flex-end;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
       }
-      .row > * {
-        flex: 1;
-      }
-      button {
-        padding: 8px 14px;
-        border: none;
-        border-radius: 6px;
-        background: #4f46e5;
+      .logo {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, var(--accent), #a855f7);
+        display: grid;
+        place-items: center;
+        font-weight: 800;
         color: white;
+      }
+      header h1 { font-size: 16px; margin: 0; flex: 1; }
+      .dot {
+        width: 9px; height: 9px; border-radius: 50%;
+        display: inline-block; margin-right: 6px;
+      }
+      .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+      .dot.off { background: var(--amber); }
+      .pill {
+        font-size: 11px; color: var(--muted);
+        display: flex; align-items: center;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+      .card > .title {
+        font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+        color: var(--muted); margin-bottom: 10px; font-weight: 700;
+      }
+
+      .row { display: flex; gap: 8px; align-items: center; }
+      input[type="text"], input[type="password"], input.search {
+        flex: 1; width: 100%;
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--card-2);
+        color: var(--text);
+        font-size: 13.5px;
+        outline: none;
+      }
+      input:focus { border-color: var(--accent); }
+
+      button {
+        padding: 9px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--card-2);
+        color: var(--text);
         font-weight: 600;
         cursor: pointer;
-        flex: 0 0 auto;
+        font-size: 13px;
+        white-space: nowrap;
+        transition: background .12s, border-color .12s, transform .04s;
       }
-      button:hover {
-        background: #4338ca;
+      button:hover { border-color: var(--accent); }
+      button:active { transform: translateY(1px); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+      button.primary:hover { background: #4f46e5; }
+      button.green { background: var(--green); border-color: var(--green); color: #052e16; }
+      button.green:hover { filter: brightness(1.05); }
+      button.icon { padding: 9px 11px; }
+
+      .filterbar {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
       }
-      button.secondary {
-        background: #059669;
+      .toggle {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap;
       }
-      button.secondary:hover {
-        background: #047857;
+
+      .modellist {
+        max-height: 190px; overflow-y: auto;
+        border: 1px solid var(--border); border-radius: 8px;
+        background: var(--card-2);
       }
-      .hint {
-        font-weight: 400;
-        font-size: 11px;
-        opacity: 0.7;
+      .modellist::-webkit-scrollbar { width: 9px; }
+      .modellist::-webkit-scrollbar-thumb { background: #34343f; border-radius: 8px; }
+      .model {
+        display: flex; align-items: center; gap: 8px;
+        padding: 9px 11px;
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
       }
+      .model:last-child { border-bottom: none; }
+      .model:hover { background: #24242c; }
+      .model.active { background: var(--accent-soft); }
+      .model .check {
+        width: 16px; color: var(--accent); font-weight: 800; text-align: center;
+        visibility: hidden;
+      }
+      .model.active .check { visibility: visible; }
+      .model .name { flex: 1; }
+      .model.active .name { font-weight: 600; }
+      .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12px; }
+
+      .actions { display: flex; gap: 8px; }
+      .actions button { flex: 1; }
+
       pre {
-        margin: 8px 0 0;
-        padding: 10px;
-        border-radius: 6px;
-        background: #0002;
-        font-size: 12px;
-        white-space: pre-wrap;
-        word-break: break-all;
-        user-select: text;
+        margin: 10px 0 0; padding: 11px;
+        border-radius: 8px; background: #0b0b0e;
+        border: 1px solid var(--border);
+        font-size: 12px; color: #c8c8d4;
+        white-space: pre-wrap; word-break: break-all;
+        -webkit-user-select: text; user-select: text;
       }
+
       .meta {
-        margin-top: 16px;
-        padding-top: 12px;
-        border-top: 1px solid #8883;
-        font-size: 12px;
-        opacity: 0.85;
-        line-height: 1.6;
+        display: grid; grid-template-columns: auto 1fr; gap: 4px 10px;
+        font-size: 11.5px; color: var(--muted);
       }
-      .badge {
-        font-weight: 700;
-      }
-      .ok {
-        color: #16a34a;
-      }
-      .warn {
-        color: #d97706;
-      }
+      .meta .k { color: #74747f; }
+      .meta .v { color: var(--text); word-break: break-all; }
+      .badge { font-weight: 700; }
+      .ok { color: var(--green); }
+      .warn { color: var(--amber); }
+
       #toast {
-        margin-top: 10px;
-        font-size: 12px;
-        min-height: 16px;
-        color: #16a34a;
+        position: sticky; bottom: 0;
+        min-height: 16px; font-size: 12px; margin-top: 4px; font-weight: 600;
       }
     </style>
   </head>
   <body>
-    <h1>Copilot Proxy</h1>
+    <header>
+      <div class="logo">C</div>
+      <h1>Copilot Proxy</h1>
+      <span class="pill"><span id="proxydot" class="dot off"></span><span id="proxytext">—</span></span>
+    </header>
 
-    <label for="apikey">API key (kept in memory only)</label>
-    <div class="row">
-      <input id="apikey" type="password" placeholder="paste your API key…" autocomplete="off" />
-      <button id="save">Save</button>
+    <div class="card">
+      <div class="title">API key</div>
+      <div class="row">
+        <input id="apikey" type="password" placeholder="paste your API key…" autocomplete="off" />
+        <button id="save" class="primary">Save</button>
+      </div>
     </div>
 
-    <label for="model">Active model <span id="modelhint" class="hint"></span></label>
-    <div class="row">
-      <select id="model"></select>
-      <button id="refresh">Refresh</button>
+    <div class="card">
+      <div class="title">Model</div>
+      <div class="filterbar">
+        <input id="search" class="search" type="text" placeholder="Filter models…" />
+        <label class="toggle"><input id="hidenonchat" type="checkbox" checked /> hide non-chat</label>
+        <button id="refresh" class="icon" title="Re-fetch models">↻</button>
+      </div>
+      <div id="modellist" class="modellist"></div>
     </div>
 
-    <label>Start Copilot</label>
-    <div class="row">
-      <button id="runcopilot" class="secondary">Run Copilot</button>
-      <button id="copycmds">Copy commands</button>
+    <div class="card">
+      <div class="title">Start Copilot</div>
+      <div class="actions">
+        <button id="runcopilot" class="green">▶ Run Copilot</button>
+        <button id="copycmds">⧉ Copy commands</button>
+      </div>
+      <pre id="cmds" title="Paste these into your own PowerShell"></pre>
     </div>
-    <pre id="cmds" title="Paste these into your own PowerShell"></pre>
+
+    <div class="card">
+      <div class="title">Status</div>
+      <div class="meta">
+        <span class="k">API key</span><span class="v"><span id="keystatus" class="badge"></span></span>
+        <span class="k">Endpoint</span><span class="v" id="endpoint"></span>
+        <span class="k">Listening</span><span class="v" id="listen"></span>
+        <span class="k">Forwarded</span><span class="v"><span id="reqcount" class="badge">0</span> requests</span>
+        <span class="k">Last</span><span class="v" id="lastreq">—</span>
+      </div>
+    </div>
 
     <div id="toast"></div>
-
-    <div class="meta">
-      Key status: <span id="keystatus" class="badge"></span><br />
-      Endpoint: <span id="endpoint"></span><br />
-      Proxy listening on: <span id="listen"></span><br />
-      Requests forwarded: <span id="reqcount" class="badge">0</span><br />
-      Last request: <span id="lastreq">—</span>
-    </div>
 
     <script>
       const invoke = window.__TAURI__.core.invoke;
       const $ = (id) => document.getElementById(id);
 
+      // Heuristic for non-chat models (embeddings, rerankers, audio, etc.).
+      const NON_CHAT = /(embed|embedding|rerank|whisper|\bbge\b|bge-|tts|stt|voice|audio|moderation|guard)/i;
+      const MODEL_LABEL = "copilot-proxy-model";
+
+      let allModels = [];
+      let selected = "";
+
       function toast(msg, isError) {
         const el = $("toast");
         el.textContent = msg;
-        el.style.color = isError ? "#dc2626" : "#16a34a";
-        setTimeout(() => (el.textContent = ""), 2500);
+        el.style.color = isError ? "#f87171" : "#4ade80";
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => (el.textContent = ""), 2600);
       }
 
-      // Same env the "Run Copilot" button sets — offered for manual copy-paste.
-      const MODEL_LABEL = "copilot-proxy-model";
       function commandsFor(listenAddr) {
         return (
           '$env:COPILOT_PROVIDER_BASE_URL="http://' + listenAddr + '"\n' +
@@ -153,32 +238,74 @@
         );
       }
 
+      function visibleModels() {
+        const q = $("search").value.trim().toLowerCase();
+        const hide = $("hidenonchat").checked;
+        return allModels.filter((m) => {
+          if (hide && NON_CHAT.test(m) && m !== selected) return false;
+          if (q && !m.toLowerCase().includes(q)) return false;
+          return true;
+        });
+      }
+
+      function renderModels() {
+        const list = $("modellist");
+        const models = visibleModels();
+        if (allModels.length === 0) {
+          list.innerHTML =
+            '<div class="empty">No models yet — set your API key, then refresh.</div>';
+          return;
+        }
+        if (models.length === 0) {
+          list.innerHTML = '<div class="empty">No models match the filter.</div>';
+          return;
+        }
+        list.innerHTML = "";
+        for (const m of models) {
+          const row = document.createElement("div");
+          row.className = "model" + (m === selected ? " active" : "");
+          row.innerHTML = '<span class="check">✓</span><span class="name"></span>';
+          row.querySelector(".name").textContent = m;
+          row.addEventListener("click", async () => {
+            try {
+              await invoke("set_model", { model: m });
+              selected = m;
+              renderModels();
+              toast("Active model: " + m);
+            } catch (err) {
+              toast(String(err), true);
+            }
+          });
+          list.appendChild(row);
+        }
+      }
+
       async function refresh() {
         const s = await invoke("get_state");
+
         $("endpoint").textContent = s.corporate_base_url;
         $("listen").textContent = s.listen_addr;
         $("cmds").textContent = commandsFor(s.listen_addr);
 
         const keyEl = $("keystatus");
-        keyEl.textContent = s.has_api_key ? "set" : "missing";
+        keyEl.textContent = s.has_api_key ? "set" : "not set";
         keyEl.className = "badge " + (s.has_api_key ? "ok" : "warn");
 
-        $("modelhint").textContent =
-          s.models.length === 0
-            ? "— set API key, then Refresh"
-            : "(" + s.models.length + " available)";
+        const ready = s.has_api_key && s.models.length > 0;
+        $("proxydot").className = "dot " + (ready ? "on" : "off");
+        $("proxytext").textContent = ready
+          ? "proxy ready"
+          : s.has_api_key
+          ? "no models"
+          : "set API key";
 
-        const select = $("model");
-        // Don't clobber the dropdown while the user is interacting with it.
-        if (document.activeElement !== select) {
-          select.innerHTML = "";
-          for (const m of s.models) {
-            const opt = document.createElement("option");
-            opt.value = m;
-            opt.textContent = m;
-            if (m === s.selected_model) opt.selected = true;
-            select.appendChild(opt);
-          }
+        // Only re-render the list when the data actually changed (avoids flicker).
+        const key = s.models.join("|") + "::" + s.selected_model;
+        if (key !== renderModels._key) {
+          renderModels._key = key;
+          allModels = s.models;
+          selected = s.selected_model;
+          renderModels();
         }
 
         const log = s.request_log;
@@ -206,7 +333,7 @@
         $("apikey").value = "";
         if (key) {
           toast("API key saved — fetching models…");
-          await fetchModels(true); // auto-load models once the key is set
+          await fetchModels(true);
         } else {
           toast("API key cleared.");
           await refresh();
@@ -214,15 +341,8 @@
       });
 
       $("refresh").addEventListener("click", () => fetchModels(true));
-
-      $("model").addEventListener("change", async (e) => {
-        try {
-          await invoke("set_model", { model: e.target.value });
-          toast("Switched model to " + e.target.value + ".");
-        } catch (err) {
-          toast(String(err), true);
-        }
-      });
+      $("search").addEventListener("input", renderModels);
+      $("hidenonchat").addEventListener("change", renderModels);
 
       $("runcopilot").addEventListener("click", async () => {
         try {
@@ -243,7 +363,7 @@
       });
 
       refresh();
-      // Poll so forwarded-traffic stats update live while you use Copilot.
+      // Poll so traffic stats stay live; the model list only re-renders on change.
       setInterval(refresh, 1500);
     </script>
   </body>

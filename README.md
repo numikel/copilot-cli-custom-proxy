@@ -72,7 +72,7 @@ On launch the app minimizes to the tray. From the tray menu you can:
 - **"Refresh models"** — re-fetch the model list from the endpoint,
 - **"Run Copilot"** — opens a new terminal with the proxy environment variables
   already set and starts `copilot`,
-- open **"Set API key…"** to paste your key,
+- open **"Open Settings…"** for the full window (API key, model list, launcher),
 - choose **"Quit"** to exit.
 
 ## Configuring GitHub Copilot CLI
