@@ -52,40 +52,101 @@ pub fn set_model(state: State<'_, Arc<AppState>>, model: String) -> Result<(), S
     }
 }
 
-#[tauri::command]
-pub fn run_copilot(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    launch_copilot(&state)
+/// The model identifier passed to the launched CLI. Its value is arbitrary —
+/// the proxy rewrites the `model` field on every request — so we use a friendly
+/// label that makes it obvious traffic flows through this switcher.
+/// Only read by the Windows launcher; harmless elsewhere.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const PROXY_MODEL_LABEL: &str = "copilot-proxy-model";
+
+/// CLI agents the launcher knows how to start against the proxy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Agent {
+    Copilot,
+    Codex,
 }
 
-/// Opens a new terminal with the proxy environment variables set and runs
-/// `copilot`. Shared by the tray menu and the settings window button.
-pub fn launch_copilot(state: &AppState) -> Result<(), String> {
+impl Agent {
+    /// Parses the agent id sent from the UI / tray (e.g. "copilot", "codex").
+    pub fn from_id(id: &str) -> Option<Agent> {
+        match id {
+            "copilot" => Some(Agent::Copilot),
+            "codex" => Some(Agent::Codex),
+            _ => None,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), String> {
+    let kind = Agent::from_id(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
+    launch_agent(&state, kind)
+}
+
+/// Opens a new terminal with the proxy environment set and starts the selected
+/// agent pointed at the proxy. Shared by the tray menu and the settings window.
+pub fn launch_agent(state: &AppState, kind: Agent) -> Result<(), String> {
     let base_url = format!("http://{}", state.config.listen_addr);
-    spawn_copilot(&base_url).map_err(|e| e.to_string())
+    spawn_agent(kind, &base_url).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_copilot(base_url: &str) -> std::io::Result<()> {
+fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     // CREATE_NEW_CONSOLE — give the spawned PowerShell its own visible window.
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    // The COPILOT_MODEL value is arbitrary — the proxy rewrites the model on
-    // every request — so we use a friendly label that makes it obvious in
-    // Copilot's UI that traffic flows through this switcher.
-    const COPILOT_MODEL_LABEL: &str = "copilot-proxy-model";
-    std::process::Command::new("powershell")
-        .args(["-NoExit", "-Command", "copilot"])
-        .env("COPILOT_PROVIDER_BASE_URL", base_url)
-        .env("COPILOT_MODEL", COPILOT_MODEL_LABEL)
-        .creation_flags(CREATE_NEW_CONSOLE)
-        .spawn()?;
+
+    let mut command = std::process::Command::new("powershell");
+    command.creation_flags(CREATE_NEW_CONSOLE);
+
+    match kind {
+        Agent::Copilot => {
+            // Copilot reads the endpoint and model straight from the environment.
+            command
+                .args(["-NoExit", "-Command", "copilot"])
+                .env("COPILOT_PROVIDER_BASE_URL", base_url)
+                .env("COPILOT_MODEL", PROXY_MODEL_LABEL);
+        }
+        Agent::Codex => {
+            // Codex only speaks the Responses API (the "chat" wire API was
+            // removed in Feb 2026), so the upstream behind the proxy must
+            // support /responses. We define an ephemeral provider via `-c`
+            // overrides instead of editing the user's ~/.codex/config.toml.
+            // The env_key must point at a set variable; the value is a dummy
+            // because the proxy injects the real key from memory.
+            command
+                .args(["-NoExit", "-Command", &codex_command(base_url)])
+                .env(CODEX_KEY_ENV, "proxy-managed");
+        }
+    }
+
+    command.spawn()?;
     Ok(())
 }
 
+/// Builds the `codex` invocation that points an ephemeral provider at the proxy.
+/// Values contain no spaces, so no shell quoting is required.
+#[cfg(target_os = "windows")]
+fn codex_command(base_url: &str) -> String {
+    format!(
+        "codex \
+         -c model_provider=proxy \
+         -c model_providers.proxy.name=copilot-proxy \
+         -c model_providers.proxy.base_url={base_url} \
+         -c model_providers.proxy.wire_api=responses \
+         -c model_providers.proxy.env_key={CODEX_KEY_ENV} \
+         -c model={PROXY_MODEL_LABEL}"
+    )
+}
+
+/// Environment variable Codex reads the (dummy) API key from.
+#[cfg(target_os = "windows")]
+const CODEX_KEY_ENV: &str = "CODEX_PROXY_KEY";
+
 #[cfg(not(target_os = "windows"))]
-fn spawn_copilot(_base_url: &str) -> std::io::Result<()> {
+fn spawn_agent(_kind: Agent, _base_url: &str) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "Run Copilot is only supported on Windows",
+        "Launching an agent is only supported on Windows",
     ))
 }

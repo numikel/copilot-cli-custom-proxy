@@ -70,8 +70,8 @@ cargo tauri build
 On launch the app minimizes to the tray. From the tray menu you can:
 - pick the active model (applied instantly),
 - **"Refresh models"** — re-fetch the model list from the endpoint,
-- **"Run Copilot"** — opens a new terminal with the proxy environment variables
-  already set and starts `copilot`,
+- **"Run Copilot" / "Run Codex"** — open a new terminal with the proxy
+  environment already set and start the chosen agent (see the Codex note below),
 - open **"Open Settings…"** for the full window (API key, model list, launcher),
 - choose **"Quit"** to exit.
 
@@ -93,6 +93,27 @@ copilot
 `COPILOT_PROVIDER_API_KEY` is not needed — the proxy injects the key from memory.
 Use `http://127.0.0.1:8080` without `/v1`: Copilot appends `/chat/completions`,
 and the proxy forwards that path to `corporate_base_url`.
+
+### Configuring Codex CLI
+
+The **"Run Codex"** button (tray or settings window) launches `codex` with an
+ephemeral provider pointed at the proxy — no edits to your `~/.codex/config.toml`.
+The equivalent manual commands are shown under **"Copy commands"**:
+
+```powershell
+$env:CODEX_PROXY_KEY="proxy-managed"   # dummy — the proxy injects the real key
+codex -c model_provider=proxy `
+  -c model_providers.proxy.base_url="http://127.0.0.1:8080" `
+  -c model_providers.proxy.wire_api=responses `
+  -c model_providers.proxy.env_key=CODEX_PROXY_KEY `
+  -c model=copilot-proxy-model
+```
+
+> **Important:** since February 2026 Codex speaks **only the Responses API**
+> (`wire_api = "responses"`); the `chat` wire API was removed. Your
+> `corporate_base_url` must therefore expose `/responses`. Chat-only upstreams
+> (e.g. a plain Ollama server) won't work with Codex without a Responses→Chat
+> translation proxy — that bridge is out of scope for now.
 
 ### Verifying what Copilot really talks to
 
@@ -139,6 +160,8 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
 
 ## Notes
 
-- **OpenAI-compatible** endpoints (Chat Completions API) are supported.
+- **OpenAI-compatible** endpoints are supported. Copilot uses Chat Completions
+  (`/chat/completions`); Codex uses the Responses API (`/responses`). The proxy
+  forwards whichever path the client sends, so the upstream must support it.
 - All models share a single `corporate_base_url`; the proxy only changes the `model` field.
 - The API key lives in memory only — re-enter it after restarting the app.

@@ -17,10 +17,20 @@ function toast(msg, isError) {
 }
 
 function commandsFor(listenAddr) {
+  const base = "http://" + listenAddr;
   return (
-    '$env:COPILOT_PROVIDER_BASE_URL="http://' + listenAddr + '"\n' +
+    "# Copilot\n" +
+    '$env:COPILOT_PROVIDER_BASE_URL="' + base + '"\n' +
     '$env:COPILOT_MODEL="' + MODEL_LABEL + '"\n' +
-    "copilot"
+    "copilot\n" +
+    "\n" +
+    "# Codex — uses the Responses API; the upstream must support /responses\n" +
+    '$env:CODEX_PROXY_KEY="proxy-managed"\n' +
+    "codex -c model_provider=proxy" +
+    " -c model_providers.proxy.base_url=" + base +
+    " -c model_providers.proxy.wire_api=responses" +
+    " -c model_providers.proxy.env_key=CODEX_PROXY_KEY" +
+    " -c model=" + MODEL_LABEL
   );
 }
 
@@ -130,14 +140,17 @@ $("refresh").addEventListener("click", () => fetchModels(true));
 $("search").addEventListener("input", renderModels);
 $("hidenonchat").addEventListener("change", renderModels);
 
-$("runcopilot").addEventListener("click", async () => {
+async function runAgent(agent, label) {
   try {
-    await invoke("run_copilot");
-    toast("Launched Copilot in a new terminal.");
+    await invoke("run_agent", { agent });
+    toast("Launched " + label + " in a new terminal.");
   } catch (err) {
     toast(String(err), true);
   }
-});
+}
+
+$("runcopilot").addEventListener("click", () => runAgent("copilot", "Copilot"));
+$("runcodex").addEventListener("click", () => runAgent("codex", "Codex"));
 
 $("copycmds").addEventListener("click", async () => {
   try {
