@@ -1,0 +1,16 @@
+[package]
+name = "proxy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+secrecy.workspace = true
+futures-util.workspace = true
+tracing.workspace = true

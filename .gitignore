@@ -1,0 +1,15 @@
+# Rust / Cargo
+/target
+**/target
+Cargo.lock
+
+# Tauri build output
+/src-tauri/gen
+/src-tauri/target
+
+# Local runtime config — może zawierać prywatny adres endpointu / nazwy modeli
+/config.toml
+
+# Misc
+*.log
+.DS_Store

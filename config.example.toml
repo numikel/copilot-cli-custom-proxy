@@ -1,0 +1,19 @@
+# Przykładowa konfiguracja — skopiuj do `config.toml` i podstaw własne wartości.
+#
+# config.toml jest w .gitignore, żeby prywatny adres endpointu i nazwy modeli
+# nie trafiły do repozytorium. Klucza API tu NIE podajesz — wprowadzasz go
+# w oknie ustawień aplikacji (trzymany tylko w pamięci).
+
+# Adres, na którym proxy nasłuchuje lokalnie. Ustaw w Copilot CLI:
+#   COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080
+listen_addr = "127.0.0.1:8080"
+
+# Bazowy URL korporacyjnego endpointu OpenAI-compatible (Chat Completions API).
+# Ścieżka żądania z Copilota (np. /chat/completions) jest doklejana do tego adresu.
+corporate_base_url = "https://your-endpoint.example.com/v1"
+
+# Model wybrany przy starcie (musi być na liście `models`).
+default_model = "model-a"
+
+# Lista modeli widoczna w menu tray do szybkiego przełączania.
+models = ["model-a", "model-b", "model-c"]

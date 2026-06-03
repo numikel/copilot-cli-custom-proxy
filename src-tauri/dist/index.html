@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Copilot Proxy — Ustawienia</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        font-size: 14px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 14px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin: 12px 0 4px;
+      }
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        border: 1px solid #8884;
+        border-radius: 6px;
+        background: #0001;
+        font-size: 14px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .row > * {
+        flex: 1;
+      }
+      button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 6px;
+        background: #4f46e5;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+      button:hover {
+        background: #4338ca;
+      }
+      .meta {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid #8883;
+        font-size: 12px;
+        opacity: 0.85;
+        line-height: 1.6;
+      }
+      .badge {
+        font-weight: 700;
+      }
+      .ok {
+        color: #16a34a;
+      }
+      .warn {
+        color: #d97706;
+      }
+      #toast {
+        margin-top: 10px;
+        font-size: 12px;
+        min-height: 16px;
+        color: #16a34a;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Copilot Proxy</h1>
+
+    <label for="apikey">Klucz API (trzymany tylko w pamięci)</label>
+    <div class="row">
+      <input id="apikey" type="password" placeholder="wklej klucz API…" autocomplete="off" />
+      <button id="save">Zapisz</button>
+    </div>
+
+    <label for="model">Aktywny model</label>
+    <select id="model"></select>
+
+    <div id="toast"></div>
+
+    <div class="meta">
+      Status klucza: <span id="keystatus" class="badge"></span><br />
+      Endpoint: <span id="endpoint"></span><br />
+      Nasłuch proxy: <span id="listen"></span>
+    </div>
+
+    <script>
+      const invoke = window.__TAURI__.core.invoke;
+      const $ = (id) => document.getElementById(id);
+
+      function toast(msg, isError) {
+        const el = $("toast");
+        el.textContent = msg;
+        el.style.color = isError ? "#dc2626" : "#16a34a";
+        setTimeout(() => (el.textContent = ""), 2500);
+      }
+
+      async function refresh() {
+        const s = await invoke("get_state");
+        $("endpoint").textContent = s.corporate_base_url;
+        $("listen").textContent = s.listen_addr;
+
+        const keyEl = $("keystatus");
+        keyEl.textContent = s.has_api_key ? "ustawiony" : "brak";
+        keyEl.className = "badge " + (s.has_api_key ? "ok" : "warn");
+
+        const select = $("model");
+        select.innerHTML = "";
+        for (const m of s.models) {
+          const opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          if (m === s.selected_model) opt.selected = true;
+          select.appendChild(opt);
+        }
+      }
+
+      $("save").addEventListener("click", async () => {
+        const key = $("apikey").value;
+        await invoke("set_api_key", { key });
+        $("apikey").value = "";
+        toast(key ? "Klucz API zapisany." : "Klucz API wyczyszczony.");
+        await refresh();
+      });
+
+      $("model").addEventListener("change", async (e) => {
+        try {
+          await invoke("set_model", { model: e.target.value });
+          toast("Przełączono model na " + e.target.value + ".");
+        } catch (err) {
+          toast(String(err), true);
+        }
+      });
+
+      refresh();
+    </script>
+  </body>
+</html>
