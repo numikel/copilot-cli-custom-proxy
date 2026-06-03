@@ -16,9 +16,36 @@ use std::sync::Arc;
 
 /// Runs the proxy server on the address from the configuration. Blocks until it ends.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
+    warn_on_insecure_config(&state.config);
     let addr = state.config.listen_addr.clone();
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("proxy listening on http://{addr}");
     let router = build_router(state);
     axum::serve(listener, router).await
+}
+
+/// Logs warnings for configurations that could leak the API key. The proxy
+/// injects the corporate key into every forwarded request, so binding beyond
+/// loopback effectively shares that key with anything that can reach the port.
+fn warn_on_insecure_config(config: &Config) {
+    let host = config
+        .listen_addr
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(&config.listen_addr);
+    let loopback =
+        host == "127.0.0.1" || host == "::1" || host.eq_ignore_ascii_case("localhost");
+    if !loopback {
+        tracing::warn!(
+            addr = %config.listen_addr,
+            "proxy is NOT bound to loopback — it will inject your API key for ANY client \
+             that can reach this address; use 127.0.0.1 unless you really mean to expose it"
+        );
+    }
+    if !config.corporate_base_url.starts_with("https://") {
+        tracing::warn!(
+            url = %config.corporate_base_url,
+            "corporate_base_url is not HTTPS — the API key would be sent unencrypted"
+        );
+    }
 }
