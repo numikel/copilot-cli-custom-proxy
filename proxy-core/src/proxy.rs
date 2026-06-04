@@ -48,7 +48,9 @@ pub async fn fetch_models(state: &AppState) -> Result<Vec<ModelInfo>, String> {
         .api_key()
         .ok_or("API key is not set — enter it before fetching models")?;
 
-    let url = format!("{}/models", state.config.base_url_trimmed());
+    let url = state
+        .models_url()
+        .ok_or("No endpoint configured — set the endpoint URL in the settings window first")?;
     let resp = state
         .http
         .get(&url)
@@ -129,11 +131,23 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
         }
     };
 
+    // Resolve the upstream base from the configured endpoint URL.
+    let base = match state.base_url() {
+        Some(b) => b,
+        None => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "No endpoint configured. Open the app's settings window and set the endpoint URL."
+                    .to_string(),
+            )
+        }
+    };
+
     // Replace the `model` field with the model selected in the tray.
     let model = state.selected_model();
     let outgoing_body = inject_model(&body_bytes, &model);
 
-    let target_url = format!("{}{}", state.config.base_url_trimmed(), path_and_query);
+    let target_url = format!("{base}{path_and_query}");
 
     // Record + log so you can see exactly what the proxy forwards and to where.
     state.record_request(&model, path_and_query, &target_url);

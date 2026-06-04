@@ -1,31 +1,33 @@
-# Example configuration — copy this to `config.toml` and fill in your own values.
+# OPTIONAL seed configuration.
 #
-# config.toml is in .gitignore so your private endpoint address and model names
-# never end up in the repository. You do NOT put the API key here — you enter it
-# in the app's settings window (it is kept in memory only).
+# As of v0.3.0 the proxy is configured entirely in the app's settings window and
+# persists to `config.json` next to the executable. `config.toml` is no longer
+# required — it is only read ONCE, on first run, to seed `config.json` when no
+# `config.json` exists yet (handy for migrating an older install or pre-baking a
+# deployment). After that first run it is ignored.
+#
+# You do NOT put the API key here — you enter it in the settings window (it is
+# kept in memory only).
 
-# Local address the proxy listens on. In Copilot CLI set:
-#   COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080
+# Local address the proxy listens on. Editable later in the settings window.
 listen_addr = "127.0.0.1:8080"
 
-# Base URL of your OpenAI-compatible corporate endpoint.
-# The request path from the agent (e.g. /chat/completions, /responses) is
-# appended to this URL.
+# Base URL of your OpenAI-compatible endpoint. On migration this is combined with
+# the first entry of `upstream_apis` below to build the full endpoint URL stored
+# in config.json (e.g. ".../v1" + "chat" -> ".../v1/chat/completions").
+#
+# NOTE: in the settings window you instead enter the FULL endpoint URL, ending in
+# /chat/completions or /responses — never stopping at /v1 (otherwise the wire API
+# is ambiguous).
 corporate_base_url = "https://your-endpoint.example.com/v1"
 
-# Which OpenAI-compatible APIs this endpoint serves. Controls which agents the
-# app lets you launch:
+# Which OpenAI-compatible API to seed as active. The new model has ONE active API
+# at a time (a switch in the settings window), so only the FIRST entry is used on
+# migration:
 #   "chat"      -> /chat/completions  (e.g. GitHub Copilot CLI)
 #   "responses" -> /responses         (e.g. Codex CLI)
-# List every API your endpoint supports. Plain Ollama serves only "chat".
 upstream_apis = ["chat"]
 
-# Both settings below are OPTIONAL. By default the model list is fetched from
-# {corporate_base_url}/models once you enter your API key (and via the tray's
-# "Refresh models"). Uncomment to pre-seed a static list / default selection.
-
-# Model selected at startup (must be present in `models` if that is set).
+# Optional model selected at startup. The model list itself is fetched from
+# {endpoint base}/models once you enter your API key (and via "Refresh models").
 # default_model = "model-a"
-
-# Static model list shown before authenticating. Leave unset to fetch from the endpoint.
-# models = ["model-a", "model-b", "model-c"]

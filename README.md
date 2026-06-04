@@ -16,13 +16,15 @@ Copilot CLI ──▶ http://127.0.0.1:8080  (this proxy)
                      │  • injects Authorization: Bearer <key held in memory>
                      │  • forwards the remaining headers (except Host)
                      ▼
-              corporate_base_url  (OpenAI-compatible endpoint)
+              endpoint base  (OpenAI-compatible endpoint)
                      │  • the response stream is piped straight back
                      ▼
                 Copilot CLI
 ```
 
-- The model list and endpoint address come from `config.toml`.
+- **Everything is configured in the settings window** — the endpoint URL and the
+  local listen address are set there and persist to `config.json` (next to the
+  executable). No `config.toml` editing required.
 - **You enter the API key in the settings window** — it is kept only in memory
   (wrapped in `secrecy::SecretString`), never written to disk or to logs.
 
@@ -36,38 +38,50 @@ config.example.toml
 
 ## Configuration
 
-Copy `config.example.toml` to `config.toml` and fill in your own values:
+Everything is configured **in the settings window** — there is nothing to edit by
+hand. On first run (no config yet) the app starts with defaults and opens the
+settings window automatically. Your choices persist to `config.json` next to the
+executable (gitignored, as it holds your private endpoint URL).
 
-```toml
-listen_addr = "127.0.0.1:8080"
-corporate_base_url = "https://your-endpoint.example.com/v1"
-upstream_apis = ["chat"]   # which APIs the endpoint serves — see below
-# default_model and models are optional — see below
-```
+In the **Endpoint** section you set:
 
-The **model list is fetched automatically** from `{corporate_base_url}/models`
-once you enter your API key (and via the tray's **"Refresh models"**). You can
-still pre-seed a static `models` list and a `default_model` in `config.toml` if
-you want them to appear before authenticating.
+- **Endpoint URL** — the *full* upstream URL, including the API suffix, e.g.
+  `https://openrouter.ai/api/v1/chat/completions` or
+  `https://openrouter.ai/api/v1/responses`. **Do not stop at `/v1`** — the URL
+  suffix is what tells the proxy whether this is a Chat Completions or a Responses
+  endpoint.
+- **Chat completions ⟷ Responses switch** — one API is active at a time. Flipping
+  the switch rewrites the URL suffix; the active API decides which CLI agent you
+  can launch (Copilot for chat, Codex for responses).
+- **Listen address** — the local `host:port` the proxy binds. Changing it
+  restarts only the background proxy task (no app/terminal restart).
 
-### Which agents you can launch (`upstream_apis`)
+The **model list is fetched automatically** from `{endpoint base}/models` (the
+endpoint URL minus the API suffix) once you enter your API key, and via the
+tray's **"Refresh models"**.
 
-Different CLI agents speak different OpenAI-compatible APIs, so the app only
-offers to launch the ones your endpoint can actually serve. Declare what your
-endpoint supports:
+### Which agents you can launch
 
-| Value | Path | Agents |
-|-------|------|--------|
-| `"chat"` | `/chat/completions` | GitHub Copilot CLI |
-| `"responses"` | `/responses` | Codex CLI |
+Different CLI agents speak different OpenAI-compatible APIs. The active endpoint
+serves exactly one API (derived from its URL suffix), so the app enables only the
+matching agent:
 
-List every API your endpoint serves, e.g. `upstream_apis = ["chat", "responses"]`
-for OpenAI/Azure, or just `["chat"]` for a plain Ollama server. Agents whose API
-isn't listed are shown disabled (settings window) or hidden (tray), so you never
-point a CLI at an endpoint that can't answer it.
+| Endpoint suffix | API | Agent |
+|-----------------|-----|-------|
+| `/chat/completions` | chat | GitHub Copilot CLI |
+| `/responses` | responses | Codex CLI |
 
-`config.toml` is in `.gitignore` (it holds your private endpoint address).
-The app looks for `config.toml` next to the `.exe`, then in the working directory.
+The other agent is shown disabled (settings window) or hidden (tray), so you
+never point a CLI at an endpoint that can't answer it. To use the other agent,
+flip the switch (and ensure your upstream serves that API).
+
+### Optional `config.toml` seed
+
+`config.toml` is **no longer required**. If present on first run (and no
+`config.json` exists yet), it is migrated into `config.json` once and then
+ignored — useful for upgrading an older install or pre-baking a deployment. Copy
+`config.example.toml` to `config.toml` for the seed format. The app looks for
+config next to the `.exe`, then in the working directory.
 
 ## Build and run (Windows)
 
@@ -106,8 +120,12 @@ bundler, served from `src-tauri/dist/` under a restrictive `'self'` CSP). It is 
 **frameless** window (`decorations: false`) with its own title bar, and ships a
 **dark/light theme toggle** (defaults to dark; the choice is remembered in
 `localStorage`). Fonts (IBM Plex Sans/Mono) are bundled locally, so the UI needs
-no network access. It has four sections:
+no network access. It has five sections:
 
+- **Endpoint** — the full upstream URL with a **Chat completions ⟷ Responses**
+  switch (one active at a time; the switch rewrites the URL suffix), plus the
+  local **listen address**. Both are validated and persisted to `config.json`;
+  changing the listen address restarts the proxy task.
 - **API key** — paste your key (held in memory only; a **forget** link clears it).
 - **Model** — searchable list of the upstream catalog with a **"hide non-chat"**
   toggle. Models are classified in `proxy-core` (chat vs the `embed` / `image` /
@@ -117,11 +135,11 @@ no network access. It has four sections:
   **all / none** shortcuts and **shift-click** range selection. The choice is
   saved per-endpoint to `ui_state.json` (next to `config.toml`), so different
   upstreams remember their own tray selection.
-- **Start agent** — one button per known agent, each gated against the endpoint's
-  `upstream_apis` (incompatible agents are disabled with a tooltip explaining
-  which API they need). A copy-able PowerShell command block is shown too.
+- **Start agent** — one button per known agent, gated against the active
+  endpoint's API (the incompatible agent is disabled with a tooltip explaining
+  which API it needs). A copy-able PowerShell command block is shown too.
 - **Status** — live, real values polled from the proxy (~1.5 s): the configured
-  endpoint, which APIs it serves, the **forwarded** request counter, and the
+  endpoint, the active API, the **forwarded** request counter, and the
   **last** request (model → endpoint → status code).
 
 ## Configuring GitHub Copilot CLI
@@ -141,7 +159,8 @@ copilot
 
 `COPILOT_PROVIDER_API_KEY` is not needed — the proxy injects the key from memory.
 Use `http://127.0.0.1:8080` without `/v1`: Copilot appends `/chat/completions`,
-and the proxy forwards that path to `corporate_base_url`.
+and the proxy forwards that path to your endpoint base (the endpoint URL minus its
+API suffix).
 
 ### Configuring Codex CLI
 
@@ -159,11 +178,11 @@ codex -c model_provider=proxy `
 ```
 
 > **Important:** since February 2026 Codex speaks **only the Responses API**
-> (`wire_api = "responses"`); the `chat` wire API was removed. Your
-> `corporate_base_url` must therefore expose `/responses` — declare it with
-> `upstream_apis = ["responses"]` (or `["chat", "responses"]`). If you don't,
-> **"Run Codex" is disabled**, so you never point Codex at an endpoint that
-> can't answer it. Chat-only upstreams (e.g. a plain Ollama server) would need a
+> (`wire_api = "responses"`); the `chat` wire API was removed. Your endpoint must
+> therefore be a **`/responses`** URL — set it in the settings window (or flip the
+> switch to **Responses**). When the active endpoint is a chat one,
+> **"Run Codex" is disabled**, so you never point Codex at an endpoint that can't
+> answer it. Chat-only upstreams (e.g. a plain Ollama server) would need a
 > Responses→Chat translation proxy, which is out of scope for now.
 
 ### Verifying what Copilot really talks to
@@ -205,7 +224,7 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
 - **Keep `listen_addr` on loopback** (`127.0.0.1`). The proxy injects your API
   key into every forwarded request, so binding to a non-loopback address would
   let anything on the network use your key. The app logs a warning if you do.
-- Use an `https://` endpoint — a non-HTTPS `corporate_base_url` sends the key
+- Use an `https://` endpoint — a non-HTTPS endpoint URL sends the key
   unencrypted (the app warns about this too).
 - The settings window loads only local, static assets under a restrictive CSP.
 
@@ -214,5 +233,5 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
 - **OpenAI-compatible** endpoints are supported. Copilot uses Chat Completions
   (`/chat/completions`); Codex uses the Responses API (`/responses`). The proxy
   forwards whichever path the client sends, so the upstream must support it.
-- All models share a single `corporate_base_url`; the proxy only changes the `model` field.
+- All models share a single endpoint base; the proxy only changes the `model` field.
 - The API key lives in memory only — re-enter it after restarting the app.

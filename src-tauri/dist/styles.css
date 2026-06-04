@@ -152,6 +152,17 @@ html[data-theme="light"] .cp-btn--accent{color:#fff}
 .cp-key-note{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text-3);line-height:1.3}
 .cp-key-note svg{color:var(--acc);flex:none}
 
+/* ───────────────────────── ENDPOINT: API mode switch ───────────────────────── */
+.cp-seg{display:flex;gap:4px;margin-top:9px;padding:3px;border-radius:calc(var(--r) - 2px);
+  background:var(--surface-2);border:1px solid var(--line-2)}
+.cp-seg-opt{flex:1;height:26px;border:0;border-radius:calc(var(--r) - 4px);background:none;
+  color:var(--text-2);font-family:var(--sans);font-size:11.5px;font-weight:500;cursor:default;
+  transition:background .12s,color .12s}
+.cp-seg-opt:hover:not(.is-on):not([disabled]){color:var(--text)}
+.cp-seg-opt.is-on{background:var(--acc);color:#06140a}
+html[data-theme="light"] .cp-seg-opt.is-on{color:#fff}
+.cp-seg-opt[disabled]{opacity:.5;cursor:not-allowed}
+
 /* ───────────────────────── MODEL SECTION ───────────────────────── */
 .cp-filterbar{display:flex;gap:7px}
 .cp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;height:var(--row);

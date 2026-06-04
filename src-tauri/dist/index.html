@@ -43,7 +43,7 @@
     <span class="cp-tb-name">copilot<span>·</span>proxy</span>
   </div>
   <div class="cp-winbtns">
-    <button class="cp-winbtn" id="theme-toggle" title="Toggle theme"><svg width="15" height="15"><use href="#i-moon"/></svg></button>
+    <button class="cp-winbtn" id="theme-toggle" title="Toggle theme"><svg width="15" height="15"><use href="#i-sun"/></svg></button>
     <button class="cp-winbtn" id="win-min" title="Minimize"><svg width="15" height="15"><use href="#i-min"/></svg></button>
     <button class="cp-winbtn" id="win-max" title="Maximize"><svg width="15" height="15"><use href="#i-max"/></svg></button>
     <button class="cp-winbtn cp-winbtn--close" id="win-close" title="Close"><svg width="15" height="15"><use href="#i-close"/></svg></button>
@@ -64,6 +64,42 @@
 
 <!-- ───────────── Body ───────────── -->
 <div class="cp-win-body">
+
+  <!-- ENDPOINT -->
+  <section class="cp-sec">
+    <div class="cp-sec-hd">
+      <span class="cp-sec-label">Endpoint</span>
+      <span class="cp-sec-meta" id="endpoint-meta">not set</span>
+    </div>
+    <div class="cp-card">
+      <div class="cp-field-row">
+        <input class="cp-input" id="endpoint-input" type="text" placeholder="https://host/v1/chat/completions" autocomplete="off" spellcheck="false" />
+        <button class="cp-btn cp-btn--accent" id="save-endpoint-btn">Save</button>
+      </div>
+      <div class="cp-seg" id="api-switch" role="group" aria-label="API mode">
+        <button class="cp-seg-opt" id="api-chat" data-api="chat" data-suffix="/chat/completions">Chat completions</button>
+        <button class="cp-seg-opt" id="api-responses" data-api="responses" data-suffix="/responses">Responses</button>
+      </div>
+      <div class="cp-key-foot">
+        <span class="cp-key-note">
+          <svg width="13" height="13"><use href="#i-arrow"/></svg>
+          Full URL — must end in /chat/completions or /responses (not just /v1).
+        </span>
+      </div>
+    </div>
+    <div class="cp-card">
+      <div class="cp-field-row">
+        <input class="cp-input" id="listen-input" type="text" placeholder="127.0.0.1:8080" autocomplete="off" spellcheck="false" />
+        <button class="cp-btn cp-btn--ghost" id="save-listen-btn">Apply</button>
+      </div>
+      <div class="cp-key-foot">
+        <span class="cp-key-note">
+          <svg width="13" height="13"><use href="#i-wifi"/></svg>
+          Local proxy address. Changing it restarts the proxy.
+        </span>
+      </div>
+    </div>
+  </section>
 
   <!-- API KEY -->
   <section class="cp-sec">

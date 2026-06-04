@@ -7,14 +7,14 @@ const appWindow = window.__TAURI__.window.getCurrentWindow();
 
 // ───────────────────────── client state ─────────────────────────
 const ui = {
-  phase: "no-key", // no-key | loading | ready | error
+  phase: "no-endpoint", // no-endpoint | no-key | loading | ready | error
   errorMsg: "",
   hasApiKey: false,
   models: [], // [{id, chat, kind}]
   selected: "",
   listenAddr: "",
-  endpoint: "",
-  upstreamApis: [], // ["chat","responses"]
+  endpoint: "", // full upstream URL, including the API suffix
+  activeApi: null, // "chat" | "responses" | null (derived from the endpoint URL)
   requestLog: { count: 0, last_model: "", last_path: "", last_target: "", last_status: null },
   agents: [], // [{id,label,api,enabled}]
   running: null, // agent id currently launched from here
@@ -22,6 +22,9 @@ const ui = {
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
 };
+
+// API mode suffixes — the endpoint URL must end in one of these.
+const API_SUFFIX = { chat: "/chat/completions", responses: "/responses" };
 
 // Index (within the current filtered display list) of the last visibility
 // checkbox toggled — anchor for shift-click range selection.
@@ -51,16 +54,48 @@ function toast(message, kind = "ok") {
 }
 
 // ───────────────────────── data fetch ─────────────────────────
-async function loadState() {
-  const s = await invoke("get_state");
+// Maps a StateView from the backend onto the client state.
+function adoptState(s) {
   ui.hasApiKey = s.has_api_key;
   ui.models = s.models || [];
   ui.selected = s.selected_model || "";
   ui.listenAddr = s.listen_addr || "";
-  ui.endpoint = s.corporate_base_url || "";
-  ui.upstreamApis = s.upstream_apis || [];
+  ui.endpoint = s.endpoint_url || "";
+  ui.activeApi = s.active_api || null;
   ui.requestLog = s.request_log || ui.requestLog;
   ui.visible = new Set(s.visible_models || []);
+}
+
+async function loadState() {
+  adoptState(await invoke("get_state"));
+}
+
+// ───────────────────────── endpoint URL helpers ─────────────────────────
+// The wire API implied by a URL's suffix ("chat" | "responses" | null).
+function detectApi(url) {
+  const u = String(url || "").trim().replace(/\/+$/, "");
+  if (u.endsWith(API_SUFFIX.chat)) return "chat";
+  if (u.endsWith(API_SUFFIX.responses)) return "responses";
+  return null;
+}
+
+// Rewrites a URL's API suffix (swapping chat ⟷ responses, or appending when the
+// URL currently stops at the base, e.g. ".../v1").
+function rewriteSuffix(url, suffix) {
+  let u = String(url || "").trim().replace(/\/+$/, "");
+  if (u.endsWith(API_SUFFIX.chat)) u = u.slice(0, -API_SUFFIX.chat.length);
+  else if (u.endsWith(API_SUFFIX.responses)) u = u.slice(0, -API_SUFFIX.responses.length);
+  u = u.replace(/\/+$/, "");
+  return u + suffix;
+}
+
+// Client-side endpoint validation mirroring the backend rule. Returns an error
+// string, or null when valid.
+function endpointError(url) {
+  const u = String(url || "").trim();
+  if (!/^https?:\/\//i.test(u)) return "URL must start with http:// or https://";
+  if (!detectApi(u)) return "URL must end in /chat/completions or /responses (not just /v1).";
+  return null;
 }
 
 async function loadAgents() {
@@ -69,6 +104,10 @@ async function loadAgents() {
 
 function recomputePhase() {
   if (ui.phase === "loading" || ui.phase === "error") return; // sticky until resolved
+  if (!ui.activeApi) {
+    ui.phase = "no-endpoint";
+    return;
+  }
   ui.phase = !ui.hasApiKey ? "no-key" : ui.models.length ? "ready" : "no-key";
 }
 
@@ -83,6 +122,10 @@ function renderPill() {
     label = "ready",
     pulse = false;
   switch (ui.phase) {
+    case "no-endpoint":
+      variant = "warn";
+      label = "set endpoint";
+      break;
     case "no-key":
       variant = "warn";
       label = "set API key";
@@ -249,7 +292,7 @@ function renderStatus() {
 
   $("kv-apis").innerHTML = ["chat", "responses"]
     .map((api) => {
-      const on = ui.upstreamApis.includes(api);
+      const on = ui.activeApi === api;
       return `<span class="cp-apichip ${on ? "is-on" : "is-off"}">${api}${on ? "" : " ✕"}</span>`;
     })
     .join("");
@@ -283,10 +326,29 @@ function renderKey() {
   }
 }
 
+// ───────────────────────── render: endpoint section ─────────────────────────
+function renderEndpointSwitch(api) {
+  $("api-chat").classList.toggle("is-on", api === "chat");
+  $("api-responses").classList.toggle("is-on", api === "responses");
+}
+
+function renderEndpoint() {
+  const epInput = $("endpoint-input");
+  // Don't clobber what the user is typing.
+  if (document.activeElement !== epInput) epInput.value = ui.endpoint || "";
+  const detected = detectApi(epInput.value) || ui.activeApi;
+  renderEndpointSwitch(detected);
+  $("endpoint-meta").textContent = ui.activeApi || (ui.endpoint ? "invalid URL" : "not set");
+
+  const listenInput = $("listen-input");
+  if (document.activeElement !== listenInput) listenInput.value = ui.listenAddr || "";
+}
+
 // ───────────────────────── full render ─────────────────────────
 function render() {
   recomputePhase();
   renderPill();
+  renderEndpoint();
   renderKey();
   renderModels();
   renderAgents();
@@ -344,6 +406,44 @@ function selectNoneVisible() {
   lastVisIdx = null;
   persistVisible();
   renderModels();
+}
+
+// ───────────────────────── actions: endpoint ─────────────────────────
+async function applyEndpoint(url) {
+  const err = endpointError(url);
+  if (err) {
+    toast(err, "err");
+    return;
+  }
+  try {
+    // Backend validates, persists, clears the old catalog, and — if a key is
+    // set — refetches models, returning the resulting StateView.
+    const s = await invoke("set_endpoint", { url: url.trim() });
+    adoptState(s);
+    // Agent gating depends on the active API, which just changed — reload it so
+    // the right CLI (Copilot for chat / Codex for responses) enables.
+    await loadAgents().catch(() => {});
+    render();
+    toast(`Endpoint set — ${ui.activeApi || "?"} API.`);
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
+async function applyListen(addr) {
+  const a = addr.trim();
+  if (!/^[^\s:]+:\d{1,5}$/.test(a)) {
+    toast("Listen address must be host:port (e.g. 127.0.0.1:8080).", "err");
+    return;
+  }
+  try {
+    const s = await invoke("set_listen_addr", { addr: a });
+    adoptState(s);
+    render();
+    toast(`Listening on ${ui.listenAddr} — proxy restarted.`);
+  } catch (e) {
+    toast(String(e), "err");
+  }
 }
 
 // ───────────────────────── actions ─────────────────────────
@@ -474,7 +574,7 @@ document.addEventListener("visibilitychange", () => {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("cp-theme", theme);
-  $("theme-toggle").querySelector("use").setAttribute("href", theme === "dark" ? "#i-moon" : "#i-sun");
+  $("theme-toggle").querySelector("use").setAttribute("href", theme === "dark" ? "#i-sun" : "#i-moon");
 }
 
 function bind() {
@@ -483,6 +583,35 @@ function bind() {
   $("win-close").onclick = () => appWindow.close(); // Rust intercepts → hides to tray
   $("theme-toggle").onclick = () =>
     applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+
+  // Endpoint URL + API mode switch.
+  $("save-endpoint-btn").onclick = () => applyEndpoint($("endpoint-input").value);
+  $("endpoint-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") applyEndpoint($("endpoint-input").value);
+  });
+  $("endpoint-input").addEventListener("input", () => {
+    // Live-reflect the detected API on the switch while typing.
+    renderEndpointSwitch(detectApi($("endpoint-input").value) || ui.activeApi);
+  });
+  ["api-chat", "api-responses"].forEach((id) => {
+    $(id).onclick = () => {
+      const suffix = $(id).dataset.suffix;
+      const cur = $("endpoint-input").value.trim() || ui.endpoint;
+      if (!cur) {
+        toast("Enter the endpoint URL first.", "err");
+        return;
+      }
+      const url = rewriteSuffix(cur, suffix);
+      $("endpoint-input").value = url;
+      applyEndpoint(url);
+    };
+  });
+
+  // Listen address.
+  $("save-listen-btn").onclick = () => applyListen($("listen-input").value);
+  $("listen-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") applyListen($("listen-input").value);
+  });
 
   $("save-key-btn").onclick = saveKey;
   $("api-key-input").addEventListener("keydown", (e) => {

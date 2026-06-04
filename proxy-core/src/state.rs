@@ -1,5 +1,5 @@
-use crate::config::Config;
-use crate::models::{classify_model, ModelInfo};
+use crate::models::ModelInfo;
+use crate::settings::{ApiKind, RuntimeConfig};
 use crate::ui_state::UiStateFile;
 use secrecy::SecretString;
 use serde::Serialize;
@@ -29,8 +29,13 @@ pub struct RequestLog {
 /// Tauri's state manager, so a model or key change in the UI is immediately
 /// visible to the proxy.
 pub struct AppState {
-    pub config: Config,
-    /// Available models (seeded from config, then refreshed from the endpoint),
+    /// Live runtime configuration (endpoint, listen address, default model),
+    /// edited in the settings window and persisted to `config.json`.
+    config: Mutex<RuntimeConfig>,
+    /// Where `config.json` persists; `None` disables saving (e.g. in tests).
+    /// Set by the host app via [`AppState::set_config_path`].
+    config_path: Mutex<Option<PathBuf>>,
+    /// Available models (fetched from the endpoint once an API key is set),
     /// each classified as chat / non-chat for the tray and settings UI.
     models: Mutex<Vec<ModelInfo>>,
     /// Currently selected model (substituted into the `model` field of requests).
@@ -51,18 +56,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Config) -> Self {
-        let models: Vec<ModelInfo> = config.models.iter().map(|id| classify_model(id)).collect();
-        // Initial selection: configured default if valid, else the first model.
-        let selected_model = config
-            .default_model
-            .clone()
-            .filter(|m| models.is_empty() || models.iter().any(|info| &info.id == m))
-            .or_else(|| models.first().map(|info| info.id.clone()))
-            .unwrap_or_default();
+    pub fn new(config: RuntimeConfig) -> Self {
+        // Models are fetched from the endpoint once a key is set; start empty.
+        let selected_model = config.default_model.clone().unwrap_or_default();
         Self {
-            config,
-            models: Mutex::new(models),
+            config: Mutex::new(config),
+            config_path: Mutex::new(None),
+            models: Mutex::new(Vec::new()),
             selected_model: Mutex::new(selected_model),
             api_key: Mutex::new(None),
             request_log: Mutex::new(RequestLog::default()),
@@ -72,13 +72,96 @@ impl AppState {
         }
     }
 
+    // --- Runtime config accessors -------------------------------------------
+
+    /// Local address the proxy listens on.
+    pub fn listen_addr(&self) -> String {
+        self.config.lock().unwrap().listen_addr.clone()
+    }
+
+    /// Full upstream endpoint URL (empty when unconfigured).
+    pub fn endpoint_url(&self) -> String {
+        self.config.lock().unwrap().endpoint_url.clone()
+    }
+
+    /// Endpoint base (URL minus the API suffix), ready for a path to be appended.
+    pub fn base_url(&self) -> Option<String> {
+        self.config.lock().unwrap().base_url()
+    }
+
+    /// URL of the model catalog (`{base}/models`).
+    pub fn models_url(&self) -> Option<String> {
+        self.config.lock().unwrap().models_url()
+    }
+
+    /// Wire API implied by the endpoint URL, or `None` when unconfigured.
+    pub fn active_api(&self) -> Option<ApiKind> {
+        self.config.lock().unwrap().active_api()
+    }
+
+    /// A snapshot clone of the runtime config (e.g. for persistence).
+    pub fn runtime_config(&self) -> RuntimeConfig {
+        self.config.lock().unwrap().clone()
+    }
+
+    /// Key under which this endpoint's UI preferences are stored: the endpoint
+    /// base (stable across the chat/responses switch), or the raw URL as a
+    /// fallback when the suffix is unrecognized.
+    fn endpoint_key(&self) -> String {
+        let cfg = self.config.lock().unwrap();
+        cfg.base_url().unwrap_or_else(|| cfg.endpoint_url.clone())
+    }
+
+    /// Sets where `config.json` is persisted. Call once at startup.
+    pub fn set_config_path(&self, path: PathBuf) {
+        *self.config_path.lock().unwrap() = Some(path);
+    }
+
+    /// Persists the current runtime config to `config.json` (best-effort).
+    fn persist_config(&self) {
+        let path = self.config_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let cfg = self.config.lock().unwrap().clone();
+            if let Err(e) = cfg.save(&path) {
+                tracing::warn!("failed to persist config.json: {e}");
+            }
+        }
+    }
+
+    /// Replaces the endpoint URL, persists it, and reloads this endpoint's
+    /// tray-visibility selection. The caller is responsible for clearing /
+    /// refetching the model list (the catalog changes with the endpoint).
+    pub fn set_endpoint(&self, url: String) {
+        self.config.lock().unwrap().endpoint_url = url;
+        self.persist_config();
+        self.reload_visible_for_endpoint();
+    }
+
+    /// Replaces the listen address and persists it. The caller is responsible
+    /// for restarting the proxy task so the new address takes effect.
+    pub fn set_listen_addr(&self, addr: String) {
+        self.config.lock().unwrap().listen_addr = addr;
+        self.persist_config();
+    }
+
     /// Points the app at `ui_state.json` and loads this endpoint's persisted
     /// tray-visibility selection. Call once at startup (no-op-safe to skip).
     pub fn load_ui_state(&self, path: PathBuf) {
+        let key = self.endpoint_key();
         let file = UiStateFile::load(&path);
-        let visible = file.visible_models.get(&self.config.corporate_base_url).cloned();
-        *self.visible_models.lock().unwrap() = visible;
+        *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
         *self.ui_state_path.lock().unwrap() = Some(path);
+    }
+
+    /// Reloads the tray-visibility selection for the current endpoint from disk
+    /// (used after the endpoint changes).
+    fn reload_visible_for_endpoint(&self) {
+        let path = self.ui_state_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let key = self.endpoint_key();
+            let file = UiStateFile::load(&path);
+            *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
+        }
     }
 
     /// Ids of the models shown in the tray submenu for the current endpoint:
@@ -106,9 +189,9 @@ impl AppState {
         *self.visible_models.lock().unwrap() = Some(ids.clone());
         let path = self.ui_state_path.lock().unwrap().clone();
         if let Some(path) = path {
+            let key = self.endpoint_key();
             let mut file = UiStateFile::load(&path);
-            file.visible_models
-                .insert(self.config.corporate_base_url.clone(), ids);
+            file.visible_models.insert(key, ids);
             if let Err(e) = file.save(&path) {
                 tracing::warn!("failed to persist ui_state.json: {e}");
             }
@@ -215,21 +298,17 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::models::classify_model;
 
     fn state_with(models: &[&str]) -> AppState {
-        let list = models
-            .iter()
-            .map(|m| format!("\"{m}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let config = Config::from_str(&format!(
-            "listen_addr = \"127.0.0.1:0\"\n\
-             corporate_base_url = \"https://endpoint.example/v1\"\n\
-             models = [{list}]\n"
-        ))
-        .unwrap();
-        AppState::new(config)
+        let config = RuntimeConfig {
+            listen_addr: "127.0.0.1:0".to_string(),
+            endpoint_url: "https://endpoint.example/v1/chat/completions".to_string(),
+            default_model: None,
+        };
+        let state = AppState::new(config);
+        state.set_models(models.iter().map(|m| classify_model(m)).collect());
+        state
     }
 
     #[test]

@@ -5,7 +5,7 @@ use axum::{
     routing::{any, get, post},
     Json, Router,
 };
-use proxy_core::{build_router, AppState, Config, ModelKind};
+use proxy_core::{build_router, classify_model, AppState, ModelKind, RuntimeConfig};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -30,16 +30,24 @@ async fn echo(headers: HeaderMap, body: Bytes) -> Json<serde_json::Value> {
     }))
 }
 
-fn config_for(upstream: &str) -> Config {
-    Config::from_str(&format!(
-        r#"
-listen_addr = "127.0.0.1:0"
-corporate_base_url = "{upstream}"
-default_model = "model-a"
-models = ["model-a", "model-b"]
-"#
-    ))
-    .unwrap()
+/// A runtime config whose endpoint points at the given upstream's
+/// `/chat/completions` (so the derived base is exactly `upstream`).
+fn config_for(upstream: &str) -> RuntimeConfig {
+    RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/chat/completions"),
+        default_model: Some("model-a".to_string()),
+    }
+}
+
+/// A runtime config used by the model-fetch tests (base derived from the chat
+/// endpoint, so `/models` resolves to `{upstream}/models`).
+fn fetch_config_for(upstream: &str) -> RuntimeConfig {
+    RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/chat/completions"),
+        default_model: None,
+    }
 }
 
 #[tokio::test]
@@ -47,6 +55,7 @@ async fn replaces_model_and_injects_auth() {
     let upstream = spawn(Router::new().route("/chat/completions", post(echo))).await;
 
     let state = Arc::new(AppState::new(config_for(&upstream)));
+    state.set_models(vec![classify_model("model-a"), classify_model("model-b")]);
     state.set_api_key("test-key");
     assert!(state.set_selected_model("model-b"));
 
@@ -126,15 +135,7 @@ async fn fetches_models_from_endpoint() {
     }
     let upstream = spawn(Router::new().route("/models", get(models))).await;
 
-    // Config without a static `models` list — relies entirely on fetching.
-    let config = Config::from_str(&format!(
-        r#"
-listen_addr = "127.0.0.1:0"
-corporate_base_url = "{upstream}"
-"#
-    ))
-    .unwrap();
-    let state = AppState::new(config);
+    let state = AppState::new(fetch_config_for(&upstream));
     state.set_api_key("k");
 
     let fetched = proxy_core::fetch_models(&state).await.unwrap();
@@ -154,14 +155,7 @@ corporate_base_url = "{upstream}"
 #[tokio::test]
 async fn fetch_models_requires_api_key() {
     let upstream = spawn(Router::new()).await;
-    let config = Config::from_str(&format!(
-        r#"
-listen_addr = "127.0.0.1:0"
-corporate_base_url = "{upstream}"
-"#
-    ))
-    .unwrap();
-    let state = AppState::new(config);
+    let state = AppState::new(fetch_config_for(&upstream));
 
     let err = proxy_core::fetch_models(&state).await.unwrap_err();
     assert!(err.contains("API key"));
@@ -182,14 +176,7 @@ async fn fetch_models_classifies_mixed_kinds() {
     }
     let upstream = spawn(Router::new().route("/models", get(models_mixed))).await;
 
-    let config = Config::from_str(&format!(
-        r#"
-listen_addr = "127.0.0.1:0"
-corporate_base_url = "{upstream}"
-"#
-    ))
-    .unwrap();
-    let state = AppState::new(config);
+    let state = AppState::new(fetch_config_for(&upstream));
     state.set_api_key("k");
 
     let fetched = proxy_core::fetch_models(&state).await.unwrap();
@@ -217,6 +204,55 @@ corporate_base_url = "{upstream}"
     state.set_models(fetched);
     let chat_ids = state.chat_model_ids();
     assert_eq!(chat_ids, vec!["gpt-4o".to_string()]);
+}
+
+#[tokio::test]
+async fn forwards_to_base_derived_from_responses_endpoint() {
+    // Endpoint ends in /responses → base is the upstream root, and a request to
+    // the proxy's /responses path forwards to {upstream}/responses.
+    let upstream = spawn(Router::new().route("/responses", post(echo))).await;
+
+    let config = RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/responses"),
+        default_model: Some("model-a".to_string()),
+    };
+    let state = Arc::new(AppState::new(config));
+    state.set_models(vec![classify_model("model-a")]);
+    state.set_api_key("k");
+    let proxy = spawn(build_router(state)).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{proxy}/responses"))
+        .json(&json!({ "model": "original", "input": "hi" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["model"], "model-a");
+    assert_eq!(v["authorization"], "Bearer k");
+}
+
+#[tokio::test]
+async fn unconfigured_endpoint_returns_502() {
+    let state = Arc::new(AppState::new(RuntimeConfig::default()));
+    state.set_api_key("k");
+    let proxy = spawn(build_router(state)).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{proxy}/chat/completions"))
+        .json(&json!({ "model": "x", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 502);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["error"]["type"], "proxy_error");
 }
 
 #[tokio::test]

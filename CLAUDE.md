@@ -9,15 +9,23 @@ Cargo workspace, two members:
 
 - **`proxy-core/`** — GUI-independent core (fully testable). Axum reverse proxy
   that rewrites the `model` field and injects the API key.
-  - `state.rs` — `AppState` (shared `Arc`): models `Vec<ModelInfo>`, selected
-    model, in-memory `SecretString` key, `RequestLog`. Helpers: `models()`,
-    `model_ids()`, `chat_model_ids()`, `set_models()`.
+  - `settings.rs` — `RuntimeConfig { listen_addr, endpoint_url, default_model }`
+    persisted to `config.json` (live source of truth). `ApiKind { Chat, Responses }`
+    is **derived from the endpoint URL suffix** (`/chat/completions` | `/responses`);
+    `base_url()`/`models_url()` strip it. `validate_endpoint_url` (rejects URLs that
+    stop at `/v1`), `validate_listen_addr`.
+  - `state.rs` — `AppState` (shared `Arc`): `Mutex<RuntimeConfig>` + `config_path`,
+    models `Vec<ModelInfo>`, selected model, in-memory `SecretString` key,
+    `RequestLog`. Accessors: `endpoint_url()`, `base_url()`, `models_url()`,
+    `active_api()`, `listen_addr()`, `set_endpoint()`, `set_listen_addr()`,
+    `models()`, `chat_model_ids()`, `set_models()`. Persists config on mutation.
   - `models.rs` — `ModelInfo { id, chat, kind }`, `ModelKind`, and
     `classify_model(id)` (pure, id-heuristic, unit-tested).
   - `proxy.rs` — Axum router, request/response rewriting, `fetch_models()`
-    (returns `Vec<ModelInfo>`).
-  - `config.rs` — `Config` from `config.toml` (`upstream_apis` gates agents).
-  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to `config.toml`;
+    (uses `models_url()`); forwards to `base_url() + path` (502 if unconfigured).
+  - `config.rs` — legacy `Config` from `config.toml`; `into_runtime()` migrates it
+    to `RuntimeConfig` (seed only; `config.toml` is optional as of 0.3.0).
+  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to the config;
     `AppState` keeps a per-endpoint tray-visible model set (`visible_model_ids()`,
     `set_visible_models()`; `None` = all chat models). `ui_state.json` is
     gitignored.
@@ -28,9 +36,13 @@ Cargo workspace, two members:
     Models are in a submenu so first-level items stay reachable with huge catalogs.
   - `commands.rs` — `#[tauri::command]`s: `get_state`, `set_api_key`,
     `forget_api_key`, `set_model`, `run_agent`, `list_agents`, `refresh_models`,
-    `set_visible_models`. `Agent` enum + `agent_supported()` gate. `StateView`
-    is the JS↔Rust contract.
-  - `main.rs` — Builder, background proxy spawn, CloseRequested → hide to tray.
+    `set_visible_models`, `set_endpoint`, `set_listen_addr`. `Agent` enum +
+    `agent_supported()` (gated on the single `active_api()`). `StateView`
+    (`endpoint_url` + `active_api`, no more `upstream_apis`) is the JS↔Rust contract.
+  - `main.rs` — Builder, config resolution (`config.json` → `config.toml` seed →
+    defaults), background proxy spawn with restart (`ProxyTask` handle,
+    `spawn_proxy`/`restart_proxy`), opens settings on first run, CloseRequested →
+    hide to tray.
   - `dist/` — settings **webview** (vanilla JS, no bundler; `withGlobalTauri`).
     `index.html` + `styles.css` (ported 1:1 from the design) + `app.js` (state
     machine) + `fonts/` (local IBM Plex woff2).
@@ -51,10 +63,13 @@ Cargo workspace, two members:
 ## Validate
 
 ```bash
-cargo test -p proxy-core        # unit + integration (classification, swap, auth, streaming)
+cargo test -p proxy-core        # unit + integration (classification, swap, auth, streaming, endpoint)
+cargo test -p copilot-proxy     # agent gating + endpoint/listen validation
 cargo check --all-targets
 cargo clippy --all-targets
-cargo tauri dev                 # manual (needs config.toml next to it)
+cargo tauri dev                 # manual — no config needed; first run opens settings
 ```
 
-Version is shared via `[workspace.package]`; bump it **and** `tauri.conf.json`.
+Config lives in `config.json` next to the exe (written by the settings window);
+`config.toml` is an optional one-time seed. Version is shared via
+`[workspace.package]`; bump it **and** `tauri.conf.json`.

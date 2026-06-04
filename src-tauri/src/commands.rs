@@ -10,10 +10,13 @@ pub struct StateView {
     pub models: Vec<ModelInfo>,
     pub selected_model: String,
     pub has_api_key: bool,
+    /// Local address the proxy listens on (editable in the settings window).
     pub listen_addr: String,
-    pub corporate_base_url: String,
-    /// OpenAI-compatible APIs the upstream serves (gates launchable agents).
-    pub upstream_apis: Vec<String>,
+    /// Full upstream endpoint URL, including the API suffix. Empty = not configured.
+    pub endpoint_url: String,
+    /// Wire API derived from the endpoint URL: "chat", "responses", or null when
+    /// the URL is empty / its suffix is unrecognized. Gates launchable agents.
+    pub active_api: Option<String>,
     /// Model ids shown in the tray's "Models" submenu for this endpoint
     /// (curated in the settings window; defaults to all chat models).
     pub visible_models: Vec<String>,
@@ -21,18 +24,59 @@ pub struct StateView {
     pub request_log: RequestLog,
 }
 
-#[tauri::command]
-pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
+/// Builds the JS-facing view from current state.
+fn state_view(state: &AppState) -> StateView {
     StateView {
         models: state.models(),
         selected_model: state.selected_model(),
         has_api_key: state.has_api_key(),
-        listen_addr: state.config.listen_addr.clone(),
-        corporate_base_url: state.config.corporate_base_url.clone(),
-        upstream_apis: state.config.upstream_apis.clone(),
+        listen_addr: state.listen_addr(),
+        endpoint_url: state.endpoint_url(),
+        active_api: state.active_api().map(|a| a.as_str().to_string()),
         visible_models: state.visible_model_ids(),
         request_log: state.request_log(),
     }
+}
+
+#[tauri::command]
+pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
+    state_view(&state)
+}
+
+/// Sets the upstream endpoint URL (must end in /chat/completions or /responses),
+/// persists it, clears the now-stale model catalog, and — if a key is set —
+/// refetches models from the new endpoint. Rebuilds the tray.
+#[tauri::command]
+pub async fn set_endpoint(app: AppHandle, url: String) -> Result<StateView, String> {
+    let url = url.trim().to_string();
+    proxy_core::validate_endpoint_url(&url)?;
+
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    state.set_endpoint(url);
+    // The catalog belongs to the previous endpoint — drop it.
+    state.set_models(Vec::new());
+    if state.has_api_key() {
+        match proxy_core::fetch_models(&state).await {
+            Ok(models) => state.set_models(models),
+            Err(e) => tracing::warn!("model refresh after endpoint change failed: {e}"),
+        }
+    }
+    let _ = crate::tray::apply_menu(&app);
+    Ok(state_view(&state))
+}
+
+/// Sets the local listen address (validated as host:port), persists it, and
+/// restarts the background proxy task so the new address takes effect.
+#[tauri::command]
+pub fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, String> {
+    let addr = addr.trim().to_string();
+    proxy_core::validate_listen_addr(&addr)?;
+
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    state.set_listen_addr(addr);
+    crate::restart_proxy(&app, state.clone());
+    let _ = crate::tray::apply_menu(&app);
+    Ok(state_view(&state))
 }
 
 /// Sets which models appear in the tray's "Models" submenu (curated in the
@@ -56,8 +100,8 @@ pub fn forget_api_key(state: State<'_, Arc<AppState>>) {
     state.set_api_key("");
 }
 
-/// Fetches the model list from `{corporate_base_url}/models`, stores it, and
-/// rebuilds the tray menu. Returns the fetched models for the UI.
+/// Fetches the model list from the configured endpoint's `/models`, stores it,
+/// and rebuilds the tray menu. Returns the fetched models for the UI.
 #[tauri::command]
 pub async fn refresh_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     let state = app.state::<Arc<AppState>>().inner().clone();
@@ -149,24 +193,27 @@ pub fn list_agents(state: State<'_, Arc<AppState>>) -> Vec<AgentInfo> {
         .collect()
 }
 
-/// Whether the configured upstream serves the API this agent needs.
+/// Whether the active endpoint serves the API this agent needs. Only one API is
+/// active at a time (derived from the endpoint URL's suffix).
 pub(crate) fn agent_supported(state: &AppState, agent: Agent) -> bool {
     state
-        .config
-        .upstream_apis
-        .iter()
-        .any(|a| a.as_str() == agent.api())
+        .active_api()
+        .map(|a| a.as_str() == agent.api())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
 pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), String> {
     let kind = Agent::from_id(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
     if !agent_supported(&state, kind) {
+        let active = state
+            .active_api()
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_else(|| "none (endpoint not configured)".to_string());
         return Err(format!(
-            "{} needs a \"{}\" endpoint, but the upstream serves: {:?}",
+            "{} needs a \"{}\" endpoint, but the active endpoint is: {active}",
             kind.label(),
             kind.api(),
-            state.config.upstream_apis
         ));
     }
     launch_agent(&state, kind)
@@ -175,7 +222,7 @@ pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), S
 /// Opens a new terminal with the proxy environment set and starts the selected
 /// agent pointed at the proxy. Shared by the tray menu and the settings window.
 pub fn launch_agent(state: &AppState, kind: Agent) -> Result<(), String> {
-    let base_url = format!("http://{}", state.config.listen_addr);
+    let base_url = format!("http://{}", state.listen_addr());
     spawn_agent(kind, &base_url).map_err(|e| e.to_string())
 }
 
@@ -238,4 +285,48 @@ fn spawn_agent(_kind: Agent, _base_url: &str) -> std::io::Result<()> {
         std::io::ErrorKind::Unsupported,
         "Launching an agent is only supported on Windows",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proxy_core::RuntimeConfig;
+
+    fn state_with_endpoint(url: &str) -> AppState {
+        AppState::new(RuntimeConfig {
+            listen_addr: "127.0.0.1:0".to_string(),
+            endpoint_url: url.to_string(),
+            default_model: None,
+        })
+    }
+
+    #[test]
+    fn responses_endpoint_enables_only_codex() {
+        let s = state_with_endpoint("https://e.example/v1/responses");
+        assert!(!agent_supported(&s, Agent::Copilot));
+        assert!(agent_supported(&s, Agent::Codex));
+    }
+
+    #[test]
+    fn chat_endpoint_enables_only_copilot() {
+        let s = state_with_endpoint("https://e.example/v1/chat/completions");
+        assert!(agent_supported(&s, Agent::Copilot));
+        assert!(!agent_supported(&s, Agent::Codex));
+    }
+
+    #[test]
+    fn unconfigured_endpoint_enables_no_agent() {
+        let s = state_with_endpoint("");
+        assert!(!agent_supported(&s, Agent::Copilot));
+        assert!(!agent_supported(&s, Agent::Codex));
+    }
+
+    #[test]
+    fn endpoint_validation_rejects_v1_only() {
+        // The /v1-only URL is the exact mistake the new model guards against.
+        assert!(proxy_core::validate_endpoint_url("https://e.example/v1").is_err());
+        assert!(proxy_core::validate_endpoint_url("https://e.example/v1/responses").is_ok());
+        assert!(proxy_core::validate_listen_addr("127.0.0.1:8080").is_ok());
+        assert!(proxy_core::validate_listen_addr("nope").is_err());
+    }
 }

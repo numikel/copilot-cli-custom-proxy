@@ -62,6 +62,7 @@ impl Config {
     }
 
     /// Parses the configuration from a string (useful in tests).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(contents: &str) -> Result<Self, ConfigError> {
         let config: Config = toml::from_str(contents).map_err(ConfigError::Parse)?;
         config.validate()?;
@@ -99,6 +100,30 @@ impl Config {
     pub fn base_url_trimmed(&self) -> &str {
         self.corporate_base_url.trim_end_matches('/')
     }
+
+    /// Converts a legacy `config.toml` into the runtime config the app now uses.
+    /// Builds the full endpoint URL from the base + the first declared API's
+    /// suffix (the new model encodes the wire API in the URL). Used once to seed
+    /// `config.json` on first run; afterwards `config.toml` is ignored.
+    pub fn into_runtime(self) -> crate::settings::RuntimeConfig {
+        use crate::settings::ApiKind;
+        let base = self.base_url_trimmed().to_string();
+        let api = self
+            .upstream_apis
+            .first()
+            .map(String::as_str)
+            .and_then(|a| match a {
+                "responses" => Some(ApiKind::Responses),
+                "chat" => Some(ApiKind::Chat),
+                _ => None,
+            })
+            .unwrap_or(ApiKind::Chat);
+        crate::settings::RuntimeConfig {
+            listen_addr: self.listen_addr,
+            endpoint_url: format!("{base}{}", api.suffix()),
+            default_model: self.default_model,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +158,24 @@ mod tests {
     fn rejects_empty_apis() {
         let toml = format!("{MINIMAL}\nupstream_apis = []");
         assert!(Config::from_str(&toml).is_err());
+    }
+
+    #[test]
+    fn into_runtime_builds_full_endpoint_url() {
+        use crate::settings::ApiKind;
+
+        // Single "chat" API → /chat/completions suffix.
+        let chat = Config::from_str(MINIMAL).unwrap().into_runtime();
+        assert_eq!(chat.endpoint_url, "https://e.example.com/v1/chat/completions");
+        assert_eq!(chat.active_api(), Some(ApiKind::Chat));
+        assert_eq!(chat.listen_addr, "127.0.0.1:8080");
+
+        // "responses" first → /responses suffix; trailing slash on base trimmed.
+        let toml = "listen_addr = \"127.0.0.1:8080\"\n\
+                    corporate_base_url = \"https://e.example.com/v1/\"\n\
+                    upstream_apis = [\"responses\", \"chat\"]";
+        let resp = Config::from_str(toml).unwrap().into_runtime();
+        assert_eq!(resp.endpoint_url, "https://e.example.com/v1/responses");
+        assert_eq!(resp.active_api(), Some(ApiKind::Responses));
     }
 }
