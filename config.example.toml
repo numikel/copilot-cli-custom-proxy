@@ -8,9 +8,17 @@
 #   COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080
 listen_addr = "127.0.0.1:8080"
 
-# Base URL of your OpenAI-compatible corporate endpoint (Chat Completions API).
-# The request path from Copilot (e.g. /chat/completions) is appended to this URL.
+# Base URL of your OpenAI-compatible corporate endpoint.
+# The request path from the agent (e.g. /chat/completions, /responses) is
+# appended to this URL.
 corporate_base_url = "https://your-endpoint.example.com/v1"
+
+# Which OpenAI-compatible APIs this endpoint serves. Controls which agents the
+# app lets you launch:
+#   "chat"      -> /chat/completions  (e.g. GitHub Copilot CLI)
+#   "responses" -> /responses         (e.g. Codex CLI)
+# List every API your endpoint supports. Plain Ollama serves only "chat".
+upstream_apis = ["chat"]
 
 # Both settings below are OPTIONAL. By default the model list is fetched from
 # {corporate_base_url}/models once you enter your API key (and via the tray's
