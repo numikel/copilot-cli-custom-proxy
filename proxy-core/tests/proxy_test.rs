@@ -5,7 +5,7 @@ use axum::{
     routing::{any, get, post},
     Json, Router,
 };
-use proxy_core::{build_router, AppState, Config};
+use proxy_core::{build_router, AppState, Config, ModelKind};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -138,7 +138,11 @@ corporate_base_url = "{upstream}"
     state.set_api_key("k");
 
     let fetched = proxy_core::fetch_models(&state).await.unwrap();
-    assert_eq!(fetched, vec!["alpha".to_string(), "beta".to_string()]);
+    assert_eq!(fetched.len(), 2);
+    assert_eq!(fetched[0].id, "alpha");
+    assert!(fetched[0].chat);
+    assert_eq!(fetched[1].id, "beta");
+    assert!(fetched[1].chat);
 
     // set_models adopts the first model as the selection when none is set.
     state.set_models(fetched);
@@ -161,6 +165,58 @@ corporate_base_url = "{upstream}"
 
     let err = proxy_core::fetch_models(&state).await.unwrap_err();
     assert!(err.contains("API key"));
+}
+
+#[tokio::test]
+async fn fetch_models_classifies_mixed_kinds() {
+    // Upstream returns a mix: one chat model, one embedding model, one audio model.
+    async fn models_mixed() -> Json<serde_json::Value> {
+        Json(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-4o" },
+                { "id": "text-embedding-3-large" },
+                { "id": "whisper-1" },
+            ]
+        }))
+    }
+    let upstream = spawn(Router::new().route("/models", get(models_mixed))).await;
+
+    let config = Config::from_str(&format!(
+        r#"
+listen_addr = "127.0.0.1:0"
+corporate_base_url = "{upstream}"
+"#
+    ))
+    .unwrap();
+    let state = AppState::new(config);
+    state.set_api_key("k");
+
+    let fetched = proxy_core::fetch_models(&state).await.unwrap();
+    assert_eq!(fetched.len(), 3);
+
+    // gpt-4o → chat model
+    let gpt = fetched.iter().find(|m| m.id == "gpt-4o").unwrap();
+    assert!(gpt.chat, "gpt-4o should be a chat model");
+    assert_eq!(gpt.kind, None);
+
+    // text-embedding-3-large → embed (non-chat)
+    let emb = fetched
+        .iter()
+        .find(|m| m.id == "text-embedding-3-large")
+        .unwrap();
+    assert!(!emb.chat, "text-embedding-3-large should not be a chat model");
+    assert_eq!(emb.kind, Some(ModelKind::Embed));
+
+    // whisper-1 → audio (non-chat)
+    let aud = fetched.iter().find(|m| m.id == "whisper-1").unwrap();
+    assert!(!aud.chat, "whisper-1 should not be a chat model");
+    assert_eq!(aud.kind, Some(ModelKind::Audio));
+
+    // Confirm helper: only gpt-4o in chat_model_ids after set_models.
+    state.set_models(fetched);
+    let chat_ids = state.chat_model_ids();
+    assert_eq!(chat_ids, vec!["gpt-4o".to_string()]);
 }
 
 #[tokio::test]

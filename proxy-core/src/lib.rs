@@ -5,12 +5,16 @@
 //! so it can be fully tested on any platform.
 
 mod config;
+mod models;
 mod proxy;
 mod state;
+mod ui_state;
 
 pub use config::{Config, ConfigError};
+pub use models::{classify_model, ModelInfo, ModelKind};
 pub use proxy::{build_router, fetch_models};
 pub use state::{AppState, RequestLog};
+pub use ui_state::UiStateFile;
 
 use std::sync::Arc;
 

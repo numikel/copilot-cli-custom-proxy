@@ -10,6 +10,10 @@
 # Local runtime config — may contain a private endpoint address / model names
 /config.toml
 
+# UI preferences (tray-visible models, keyed by endpoint URL) — may reveal the
+# private endpoint address
+ui_state.json
+
 # Misc
 *.log
 .DS_Store

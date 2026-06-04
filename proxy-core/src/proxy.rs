@@ -1,3 +1,4 @@
+use crate::models::{classify_model, ModelInfo};
 use crate::state::AppState;
 use axum::{
     body::{Body, Bytes},
@@ -39,9 +40,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Fetches the available model ids from `{corporate_base_url}/models`
-/// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`). Requires an API key.
-pub async fn fetch_models(state: &AppState) -> Result<Vec<String>, String> {
+/// Fetches the available models from `{corporate_base_url}/models`
+/// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`), classifying each id as
+/// chat / non-chat. Requires an API key.
+pub async fn fetch_models(state: &AppState) -> Result<Vec<ModelInfo>, String> {
     let api_key = state
         .api_key()
         .ok_or("API key is not set — enter it before fetching models")?;
@@ -68,12 +70,13 @@ pub async fn fetch_models(state: &AppState) -> Result<Vec<String>, String> {
         .await
         .map_err(|e| format!("invalid JSON from {url}: {e}"))?;
 
-    let models: Vec<String> = json
+    let models: Vec<ModelInfo> = json
         .get("data")
         .and_then(|d| d.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
+                .map(classify_model)
                 .collect()
         })
         .unwrap_or_default();
