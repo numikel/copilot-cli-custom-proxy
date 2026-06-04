@@ -2,9 +2,11 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod commands;
+mod startup_error;
 mod tray;
 
 use proxy_core::{AppState, Config};
+use startup_error::{exit_with_startup_error, show_startup_error, ConfigLoadError};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,24 +23,28 @@ fn config_candidates() -> Vec<PathBuf> {
     paths
 }
 
-fn load_config() -> Config {
+fn load_config() -> Result<(Config, PathBuf), ConfigLoadError> {
     let candidates = config_candidates();
     for path in &candidates {
         if !path.exists() {
             continue;
         }
-        match Config::load(path) {
-            Ok(config) => {
-                tracing::info!("loaded configuration from {}", path.display());
-                return config;
-            }
-            Err(e) => panic!("{} ({})", e, path.display()),
-        }
+        let config = Config::load(path).map_err(|e| ConfigLoadError::Invalid {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        tracing::info!("loaded configuration from {}", path.display());
+        return Ok((config, path.clone()));
     }
-    panic!(
-        "config.toml not found — copy config.example.toml to config.toml. Checked paths: {:?}",
-        candidates
-    );
+    Err(ConfigLoadError::NotFound { candidates })
+}
+
+/// UI preferences live next to `config.toml` (or the cwd as a fallback).
+fn ui_state_path(config_path: &std::path::Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(|dir| dir.join("ui_state.json"))
+        .unwrap_or_else(|| PathBuf::from("ui_state.json"))
 }
 
 fn main() {
@@ -49,19 +55,27 @@ fn main() {
         )
         .init();
 
-    let config = load_config();
+    let (config, config_path) = match load_config() {
+        Ok(loaded) => loaded,
+        Err(err) => exit_with_startup_error(err),
+    };
+
     let state = Arc::new(AppState::new(config));
+    // Load persisted UI preferences (tray-visible models for this endpoint).
+    state.load_ui_state(ui_state_path(&config_path));
     let proxy_state = state.clone();
 
-    tauri::Builder::default()
+    if let Err(e) = tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::set_api_key,
+            commands::forget_api_key,
             commands::set_model,
             commands::run_agent,
             commands::list_agents,
-            commands::refresh_models
+            commands::refresh_models,
+            commands::set_visible_models
         ])
         .setup(move |app| {
             // The proxy server starts in the background, on the address from the config.
@@ -82,5 +96,8 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run the Tauri application");
+    {
+        show_startup_error("Copilot Proxy", &format!("Failed to start the application:\n\n{e}"));
+        std::process::exit(1);
+    }
 }

@@ -1,12 +1,40 @@
 use proxy_core::AppState;
 use std::sync::Arc;
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    image::Image,
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     AppHandle, Manager, Wry,
 };
 
 const TRAY_ID: &str = "main";
+
+/// Models shown in the tray's "Models" submenu: the endpoint's curated visible
+/// set (chosen in the settings window; defaults to all chat models), with the
+/// active model pinned first so its checkmark is always reachable.
+fn tray_submenu_ids(state: &AppState, selected: &str) -> Vec<String> {
+    let mut ids = state.visible_model_ids();
+    if !selected.is_empty() && !ids.iter().any(|id| id == selected) {
+        ids.insert(0, selected.to_string());
+    }
+    ids
+}
+
+/// True when the proxy is ready to serve: a key is set and a model is selected.
+/// Drives the active (accent) vs idle (muted) tray icon.
+fn is_active(state: &AppState) -> bool {
+    state.has_api_key() && !state.selected_model().is_empty()
+}
+
+/// Swaps the tray icon between the active and idle artwork for the given state.
+fn update_tray_icon(app: &AppHandle, active: bool) {
+    const ACTIVE: &[u8] = include_bytes!("../icons/tray-active.png");
+    const IDLE: &[u8] = include_bytes!("../icons/tray-idle.png");
+    let bytes = if active { ACTIVE } else { IDLE };
+    if let (Some(tray), Ok(image)) = (app.tray_by_id(TRAY_ID), Image::from_bytes(bytes)) {
+        let _ = tray.set_icon(Some(image));
+    }
+}
 
 fn status_text(state: &AppState) -> String {
     let models = state.models();
@@ -28,17 +56,30 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     menu.append(&status)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
-    for model in state.models() {
-        let item = CheckMenuItem::with_id(
-            app,
-            format!("model::{model}"),
-            &model,
-            true,
-            model == selected,
-            None::<&str>,
-        )?;
-        menu.append(&item)?;
+    // Models live in their own submenu so the first level stays short and
+    // "Open Settings…"/"Quit" are always reachable, even with hundreds of
+    // models. The submenu shows the endpoint's curated chat models (see the
+    // settings window); the full catalog is always available there.
+    let models_menu = Submenu::with_id(app, "models_menu", "Models", true)?;
+    let ids = tray_submenu_ids(state, &selected);
+    if ids.is_empty() {
+        let empty = MenuItem::with_id(app, "models_empty", "No models — Refresh first", false, None::<&str>)?;
+        models_menu.append(&empty)?;
+    } else {
+        for model in ids {
+            let checked = model == selected;
+            let item = CheckMenuItem::with_id(
+                app,
+                format!("model::{model}"),
+                &model,
+                true,
+                checked,
+                None::<&str>,
+            )?;
+            models_menu.append(&item)?;
+        }
     }
+    menu.append(&models_menu)?;
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "refresh_models", "Refresh models", true, None::<&str>)?)?;
@@ -68,6 +109,7 @@ pub fn apply_menu(app: &AppHandle) -> tauri::Result<()> {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_menu(Some(menu))?;
     }
+    update_tray_icon(app, is_active(&state));
     Ok(())
 }
 
@@ -121,6 +163,9 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+
+    // Reflect the initial readiness in the tray icon (idle until a key + model).
+    update_tray_icon(app.handle(), is_active(&state));
 
     Ok(())
 }

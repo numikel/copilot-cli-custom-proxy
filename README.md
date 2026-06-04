@@ -92,6 +92,38 @@ On launch the app minimizes to the tray. From the tray menu you can:
 - open **"Open Settings…"** for the full window (API key, model list, launcher),
 - choose **"Quit"** to exit.
 
+The tray icon has two states: an accent-filled glyph when the proxy is ready (a
+key is set and a model is selected) and a muted outline when it is idle. Models
+live in a **"Models ▸" submenu** (not the first level) so "Open Settings…" and
+"Quit" stay reachable even with hundreds of models. You choose **which** models
+appear in that submenu in the settings window (see below) — the full catalog is
+always available there.
+
+## Settings window
+
+The settings window is a small, single-purpose webview (vanilla HTML/CSS/JS — no
+bundler, served from `src-tauri/dist/` under a restrictive `'self'` CSP). It is a
+**frameless** window (`decorations: false`) with its own title bar, and ships a
+**dark/light theme toggle** (defaults to dark; the choice is remembered in
+`localStorage`). Fonts (IBM Plex Sans/Mono) are bundled locally, so the UI needs
+no network access. It has four sections:
+
+- **API key** — paste your key (held in memory only; a **forget** link clears it).
+- **Model** — searchable list of the upstream catalog with a **"hide non-chat"**
+  toggle. Models are classified in `proxy-core` (chat vs the `embed` / `image` /
+  `audio` / `rerank` / `moderation` families) and tagged accordingly; clicking a
+  model applies it instantly. Each chat model has a **"show in tray" checkbox**
+  that controls whether it appears in the tray's Models submenu — with
+  **all / none** shortcuts and **shift-click** range selection. The choice is
+  saved per-endpoint to `ui_state.json` (next to `config.toml`), so different
+  upstreams remember their own tray selection.
+- **Start agent** — one button per known agent, each gated against the endpoint's
+  `upstream_apis` (incompatible agents are disabled with a tooltip explaining
+  which API they need). A copy-able PowerShell command block is shown too.
+- **Status** — live, real values polled from the proxy (~1.5 s): the configured
+  endpoint, which APIs it serves, the **forwarded** request counter, and the
+  **last** request (model → endpoint → status code).
+
 ## Configuring GitHub Copilot CLI
 
 The easiest way is the **"Run Copilot"** button (tray or settings window) — it

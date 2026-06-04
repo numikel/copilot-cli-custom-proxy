@@ -1,6 +1,10 @@
 use crate::config::Config;
+use crate::models::{classify_model, ModelInfo};
+use crate::ui_state::UiStateFile;
 use secrecy::SecretString;
 use serde::Serialize;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// A snapshot of recent proxy traffic, surfaced in the UI so you can verify
@@ -26,8 +30,9 @@ pub struct RequestLog {
 /// visible to the proxy.
 pub struct AppState {
     pub config: Config,
-    /// Available models (seeded from config, then refreshed from the endpoint).
-    models: Mutex<Vec<String>>,
+    /// Available models (seeded from config, then refreshed from the endpoint),
+    /// each classified as chat / non-chat for the tray and settings UI.
+    models: Mutex<Vec<ModelInfo>>,
     /// Currently selected model (substituted into the `model` field of requests).
     selected_model: Mutex<String>,
     /// API key — in memory only, wrapped in `SecretString`
@@ -35,19 +40,25 @@ pub struct AppState {
     api_key: Mutex<Option<SecretString>>,
     /// Rolling record of forwarded requests for live verification in the UI.
     request_log: Mutex<RequestLog>,
+    /// Models shown in the tray's "Models" submenu for the current endpoint.
+    /// `None` means "not curated" → all chat models are shown by default.
+    visible_models: Mutex<Option<Vec<String>>>,
+    /// Where UI preferences persist (`ui_state.json`); `None` disables saving
+    /// (e.g. in tests). Set by the host app via [`AppState::load_ui_state`].
+    ui_state_path: Mutex<Option<PathBuf>>,
     /// Shared HTTP client used to forward requests upstream.
     pub http: reqwest::Client,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
-        let models = config.models.clone();
+        let models: Vec<ModelInfo> = config.models.iter().map(|id| classify_model(id)).collect();
         // Initial selection: configured default if valid, else the first model.
         let selected_model = config
             .default_model
             .clone()
-            .filter(|m| models.is_empty() || models.contains(m))
-            .or_else(|| models.first().cloned())
+            .filter(|m| models.is_empty() || models.iter().any(|info| &info.id == m))
+            .or_else(|| models.first().map(|info| info.id.clone()))
             .unwrap_or_default();
         Self {
             config,
@@ -55,21 +66,89 @@ impl AppState {
             selected_model: Mutex::new(selected_model),
             api_key: Mutex::new(None),
             request_log: Mutex::new(RequestLog::default()),
+            visible_models: Mutex::new(None),
+            ui_state_path: Mutex::new(None),
             http: reqwest::Client::new(),
         }
     }
 
-    pub fn models(&self) -> Vec<String> {
+    /// Points the app at `ui_state.json` and loads this endpoint's persisted
+    /// tray-visibility selection. Call once at startup (no-op-safe to skip).
+    pub fn load_ui_state(&self, path: PathBuf) {
+        let file = UiStateFile::load(&path);
+        let visible = file.visible_models.get(&self.config.corporate_base_url).cloned();
+        *self.visible_models.lock().unwrap() = visible;
+        *self.ui_state_path.lock().unwrap() = Some(path);
+    }
+
+    /// Ids of the models shown in the tray submenu for the current endpoint:
+    /// the curated set (intersected with the known chat models, preserving
+    /// catalog order) or — when uncurated — every chat model.
+    pub fn visible_model_ids(&self) -> Vec<String> {
+        let models = self.models.lock().unwrap();
+        let visible = self.visible_models.lock().unwrap();
+        match &*visible {
+            None => models.iter().filter(|m| m.chat).map(|m| m.id.clone()).collect(),
+            Some(ids) => {
+                let allow: HashSet<&str> = ids.iter().map(String::as_str).collect();
+                models
+                    .iter()
+                    .filter(|m| m.chat && allow.contains(m.id.as_str()))
+                    .map(|m| m.id.clone())
+                    .collect()
+            }
+        }
+    }
+
+    /// Replaces the tray-visibility selection for the current endpoint and
+    /// persists it (best-effort) to `ui_state.json`.
+    pub fn set_visible_models(&self, ids: Vec<String>) {
+        *self.visible_models.lock().unwrap() = Some(ids.clone());
+        let path = self.ui_state_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let mut file = UiStateFile::load(&path);
+            file.visible_models
+                .insert(self.config.corporate_base_url.clone(), ids);
+            if let Err(e) = file.save(&path) {
+                tracing::warn!("failed to persist ui_state.json: {e}");
+            }
+        }
+    }
+
+    pub fn models(&self) -> Vec<ModelInfo> {
         self.models.lock().unwrap().clone()
+    }
+
+    /// Ids of every available model, in order (convenience for callers that only
+    /// need identifiers, e.g. logging).
+    pub fn model_ids(&self) -> Vec<String> {
+        self.models
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// Ids of the chat models only, in order — the subset the tray and agents
+    /// care about.
+    pub fn chat_model_ids(&self) -> Vec<String> {
+        self.models
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.chat)
+            .map(|m| m.id.clone())
+            .collect()
     }
 
     /// Replaces the available model list (e.g. after fetching from the endpoint).
     /// Keeps the current selection if still present, otherwise picks the first.
-    pub fn set_models(&self, models: Vec<String>) {
+    pub fn set_models(&self, models: Vec<ModelInfo>) {
         {
             let mut selected = self.selected_model.lock().unwrap();
-            if !models.iter().any(|m| m == &*selected) {
-                *selected = models.first().cloned().unwrap_or_default();
+            if !models.iter().any(|m| m.id == *selected) {
+                *selected = models.first().map(|m| m.id.clone()).unwrap_or_default();
             }
         }
         *self.models.lock().unwrap() = models;
@@ -83,7 +162,7 @@ impl AppState {
     /// Returns `false` when the model is unknown.
     pub fn set_selected_model(&self, model: impl Into<String>) -> bool {
         let model = model.into();
-        let known = self.models.lock().unwrap().iter().any(|m| m == &model);
+        let known = self.models.lock().unwrap().iter().any(|m| m.id == model);
         if !known {
             return false;
         }
@@ -130,5 +209,48 @@ impl AppState {
     /// Returns a snapshot of recent traffic for display in the UI.
     pub fn request_log(&self) -> RequestLog {
         self.request_log.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn state_with(models: &[&str]) -> AppState {
+        let list = models
+            .iter()
+            .map(|m| format!("\"{m}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let config = Config::from_str(&format!(
+            "listen_addr = \"127.0.0.1:0\"\n\
+             corporate_base_url = \"https://endpoint.example/v1\"\n\
+             models = [{list}]\n"
+        ))
+        .unwrap();
+        AppState::new(config)
+    }
+
+    #[test]
+    fn visible_defaults_to_all_chat_models_in_order() {
+        let state = state_with(&["gpt-4o", "text-embedding-3-large", "claude-3"]);
+        // Uncurated → every chat model, non-chat excluded, catalog order kept.
+        assert_eq!(state.visible_model_ids(), vec!["gpt-4o", "claude-3"]);
+    }
+
+    #[test]
+    fn set_visible_curates_and_intersects_chat() {
+        let state = state_with(&["gpt-4o", "claude-3", "whisper-1"]);
+        // whisper-1 is non-chat → dropped; "ghost" is unknown → dropped.
+        state.set_visible_models(vec!["claude-3".into(), "whisper-1".into(), "ghost".into()]);
+        assert_eq!(state.visible_model_ids(), vec!["claude-3"]);
+    }
+
+    #[test]
+    fn curating_to_none_hides_every_model() {
+        let state = state_with(&["gpt-4o", "claude-3"]);
+        state.set_visible_models(vec![]);
+        assert!(state.visible_model_ids().is_empty());
     }
 }
