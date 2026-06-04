@@ -1,59 +1,156 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Copilot Proxy — Settings</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <header>
-      <div class="logo">C</div>
-      <h1>Copilot Proxy</h1>
-      <span class="pill"><span id="proxydot" class="dot off"></span><span id="proxytext">—</span></span>
-    </header>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Copilot Proxy — Settings</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
 
-    <div class="card">
-      <div class="title">API key</div>
-      <div class="row">
-        <input id="apikey" type="password" placeholder="paste your API key…" autocomplete="off" />
-        <button id="save" class="primary">Save</button>
+<!-- SVG icon sprite (referenced via <use>) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-swap" viewBox="0 0 24 24">
+      <path d="M7 8.5h9.5a3 3 0 0 1 0 6H9.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="m11 5-3.5 3.5L11 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M17 15.5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 6.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-4.2-4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-.6 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 8.5a15 15 0 0 1 19 0M5.5 12a10 10 0 0 1 13 0M8.5 15.5a5 5 0 0 1 7 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="19" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m6.5 6.5 11 11" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 16V6.2A2.2 2.2 0 0 1 7.2 4H16" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4 2.5 20h19z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.1" fill="currentColor"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h13M13 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.5M12 19v2.5M4.4 4.4l1.8 1.8M17.8 17.8l1.8 1.8M2.5 12H5M19 12h2.5M4.4 19.6l1.8-1.8M17.8 6.2l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-max" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- ───────────── Title bar (drag region) ───────────── -->
+<div class="cp-titlebar" data-tauri-drag-region>
+  <div class="cp-tb-brand">
+    <svg width="18" height="18" style="color:var(--acc)"><use href="#i-swap"/></svg>
+    <span class="cp-tb-name">copilot<span>·</span>proxy</span>
+  </div>
+  <div class="cp-winbtns">
+    <button class="cp-winbtn" id="theme-toggle" title="Toggle theme"><svg width="15" height="15"><use href="#i-moon"/></svg></button>
+    <button class="cp-winbtn" id="win-min" title="Minimize"><svg width="15" height="15"><use href="#i-min"/></svg></button>
+    <button class="cp-winbtn" id="win-max" title="Maximize"><svg width="15" height="15"><use href="#i-max"/></svg></button>
+    <button class="cp-winbtn cp-winbtn--close" id="win-close" title="Close"><svg width="15" height="15"><use href="#i-close"/></svg></button>
+  </div>
+</div>
+
+<!-- ───────────── Header (status pill + listening address) ───────────── -->
+<div class="cp-header">
+  <span class="cp-pill" id="status-pill">
+    <span class="cp-pill-dot"></span>
+    <span id="status-pill-text">starting…</span>
+  </span>
+  <span class="cp-header-host">
+    <svg width="13" height="13"><use href="#i-wifi"/></svg>
+    <span id="listen-addr">—</span>
+  </span>
+</div>
+
+<!-- ───────────── Body ───────────── -->
+<div class="cp-win-body">
+
+  <!-- API KEY -->
+  <section class="cp-sec">
+    <div class="cp-sec-hd">
+      <span class="cp-sec-label">API key</span>
+      <span class="cp-sec-meta">BYOK</span>
+    </div>
+    <div class="cp-card">
+      <div class="cp-field-row">
+        <input class="cp-input" id="api-key-input" type="password" placeholder="paste your API key…" autocomplete="off" spellcheck="false" />
+        <button class="cp-btn cp-btn--accent" id="save-key-btn">Save</button>
+      </div>
+      <div class="cp-key-foot">
+        <span class="cp-key-note">
+          <svg width="13" height="13"><use href="#i-lock"/></svg>
+          Held in memory only — never written to disk.
+        </span>
+        <button class="cp-linkbtn" id="forget-key-btn" hidden>forget</button>
       </div>
     </div>
+  </section>
 
-    <div class="card">
-      <div class="title">Model</div>
-      <div class="filterbar">
-        <input id="search" class="search" type="text" placeholder="Filter models…" />
-        <label class="toggle"><input id="hidenonchat" type="checkbox" checked /> hide non-chat</label>
-        <button id="refresh" class="icon" title="Re-fetch models">↻</button>
-      </div>
-      <div id="modellist" class="modellist"></div>
+  <!-- MODEL -->
+  <section class="cp-sec">
+    <div class="cp-sec-hd">
+      <span class="cp-sec-label">Model</span>
+      <span class="cp-sec-meta" id="model-meta">0/0</span>
     </div>
-
-    <div class="card">
-      <div class="title">Start agent</div>
-      <div class="actions">
-        <span id="agentbtns"></span>
-        <button id="copycmds">⧉ Copy commands</button>
-      </div>
-      <pre id="cmds" title="Paste these into your own PowerShell"></pre>
+    <div class="cp-filterbar">
+      <label class="cp-search">
+        <svg width="14" height="14"><use href="#i-search"/></svg>
+        <input class="cp-search-input" id="model-filter" type="text" placeholder="Filter models…" spellcheck="false" />
+        <button class="cp-search-clear" id="filter-clear" hidden><svg width="11" height="11"><use href="#i-x"/></svg></button>
+      </label>
+      <button class="cp-toggle is-on" id="hide-nonchat" title="Hide non-chat models">
+        <span class="cp-toggle-box"><svg width="11" height="11"><use href="#i-check"/></svg></span>
+        hide non-chat
+      </button>
+      <button class="cp-iconbtn" id="refresh-btn" title="Refresh models"><svg width="14" height="14"><use href="#i-refresh"/></svg></button>
     </div>
-
-    <div class="card">
-      <div class="title">Status</div>
-      <div class="meta">
-        <span class="k">API key</span><span class="v"><span id="keystatus" class="badge"></span></span>
-        <span class="k">Endpoint</span><span class="v" id="endpoint"></span>
-        <span class="k">APIs</span><span class="v" id="apis"></span>
-        <span class="k">Listening</span><span class="v" id="listen"></span>
-        <span class="k">Forwarded</span><span class="v"><span id="reqcount" class="badge">0</span> requests</span>
-        <span class="k">Last</span><span class="v" id="lastreq">—</span>
+    <div class="cp-modellist">
+      <div class="cp-vis-bar">
+        <span class="cp-vis-lbl"><svg width="12" height="12"><use href="#i-eye"/></svg> show in tray</span>
+        <button class="cp-linkbtn cp-vis-act" id="vis-all">all</button>
+        <span class="cp-vis-sep">·</span>
+        <button class="cp-linkbtn cp-vis-act" id="vis-none">none</button>
+        <span class="cp-vis-count" id="vis-count">0 in tray</span>
       </div>
+      <div class="cp-rows" id="model-rows"><!-- populated by app.js --></div>
     </div>
+  </section>
 
-    <div id="toast"></div>
+  <!-- START AGENT -->
+  <section class="cp-sec">
+    <div class="cp-sec-hd">
+      <span class="cp-sec-label">Start agent</span>
+      <span class="cp-sec-meta" id="agent-meta">0 CLIs</span>
+    </div>
+    <div class="cp-agentgrid" id="agent-grid"><!-- populated by app.js --></div>
+    <div class="cp-cmdhead">
+      <span class="cp-cmdlabel">PowerShell — run manually</span>
+      <button class="cp-iconbtn cp-iconbtn--wide cp-btn--sm" id="copy-cmd"><svg width="13" height="13"><use href="#i-copy"/></svg> copy</button>
+    </div>
+    <pre class="cp-pre" id="cmd-block">—</pre>
+  </section>
 
-    <script src="app.js"></script>
-  </body>
+  <!-- STATUS -->
+  <section class="cp-sec">
+    <div class="cp-sec-hd">
+      <span class="cp-sec-label">Status</span>
+      <span class="cp-sec-meta" id="status-meta">idle</span>
+    </div>
+    <div class="cp-statusgrid">
+      <div class="cp-kv"><span class="cp-k">key</span><span class="cp-v" id="kv-key"><span class="cp-badge cp-badge--muted">not set</span></span></div>
+      <div class="cp-kv"><span class="cp-k">endpoint</span><span class="cp-v"><span class="cp-v--url" id="kv-endpoint">—</span></span></div>
+      <div class="cp-kv"><span class="cp-k">apis</span><span class="cp-v cp-apis" id="kv-apis"></span></div>
+      <div class="cp-kv"><span class="cp-k">listening</span><span class="cp-v cp-mono" id="kv-listening">—</span></div>
+      <div class="cp-kv"><span class="cp-k">forwarded</span><span class="cp-v cp-mono cp-tnum" id="kv-forwarded">0</span></div>
+      <div class="cp-kv cp-kv--last"><span class="cp-k">last</span><span class="cp-v cp-last" id="kv-last"><span class="cp-muted">— no requests yet</span></span></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ───────────── Toasts ───────────── -->
+<div class="cp-toasts" id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
 </html>

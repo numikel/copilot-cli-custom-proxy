@@ -1,4 +1,4 @@
-use proxy_core::{AppState, RequestLog};
+use proxy_core::{AppState, ModelInfo, RequestLog};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -6,13 +6,17 @@ use tauri::{AppHandle, Manager, State};
 /// State view passed to the UI (without exposing the API key itself).
 #[derive(Serialize)]
 pub struct StateView {
-    pub models: Vec<String>,
+    /// Available models, each classified as chat / non-chat for filtering.
+    pub models: Vec<ModelInfo>,
     pub selected_model: String,
     pub has_api_key: bool,
     pub listen_addr: String,
     pub corporate_base_url: String,
     /// OpenAI-compatible APIs the upstream serves (gates launchable agents).
     pub upstream_apis: Vec<String>,
+    /// Model ids shown in the tray's "Models" submenu for this endpoint
+    /// (curated in the settings window; defaults to all chat models).
+    pub visible_models: Vec<String>,
     /// Live snapshot of forwarded traffic, so the UI can show what Copilot hits.
     pub request_log: RequestLog,
 }
@@ -26,8 +30,19 @@ pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
         listen_addr: state.config.listen_addr.clone(),
         corporate_base_url: state.config.corporate_base_url.clone(),
         upstream_apis: state.config.upstream_apis.clone(),
+        visible_models: state.visible_model_ids(),
         request_log: state.request_log(),
     }
+}
+
+/// Sets which models appear in the tray's "Models" submenu (curated in the
+/// settings window), persists the choice per-endpoint, and rebuilds the tray.
+#[tauri::command]
+pub fn set_visible_models(app: AppHandle, models: Vec<String>) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    state.set_visible_models(models);
+    let _ = crate::tray::apply_menu(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -35,10 +50,16 @@ pub fn set_api_key(state: State<'_, Arc<AppState>>, key: String) {
     state.set_api_key(key);
 }
 
+/// Clears the in-memory API key (the settings window's "forget" action).
+#[tauri::command]
+pub fn forget_api_key(state: State<'_, Arc<AppState>>) {
+    state.set_api_key("");
+}
+
 /// Fetches the model list from `{corporate_base_url}/models`, stores it, and
 /// rebuilds the tray menu. Returns the fetched models for the UI.
 #[tauri::command]
-pub async fn refresh_models(app: AppHandle) -> Result<Vec<String>, String> {
+pub async fn refresh_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     let models = proxy_core::fetch_models(&state).await?;
     state.set_models(models.clone());
