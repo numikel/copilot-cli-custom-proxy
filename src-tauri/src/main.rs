@@ -59,7 +59,8 @@ fn main() {
             commands::get_state,
             commands::set_api_key,
             commands::set_model,
-            commands::run_copilot,
+            commands::run_agent,
+            commands::list_agents,
             commands::refresh_models
         ])
         .setup(move |app| {

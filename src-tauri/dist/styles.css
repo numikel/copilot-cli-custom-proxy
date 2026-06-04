@@ -95,6 +95,8 @@ button.primary:hover { background: #4f46e5; }
 button.green { background: var(--green); border-color: var(--green); color: #052e16; }
 button.green:hover { filter: brightness(1.05); }
 button.icon { padding: 9px 11px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--border); filter: none; }
 
 .filterbar {
   display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
@@ -131,6 +133,7 @@ button.icon { padding: 9px 11px; }
 
 .actions { display: flex; gap: 8px; }
 .actions button { flex: 1; }
+#agentbtns { display: contents; }
 
 pre {
   margin: 10px 0 0; padding: 11px;

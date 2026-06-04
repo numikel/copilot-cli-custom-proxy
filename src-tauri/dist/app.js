@@ -7,6 +7,7 @@ const MODEL_LABEL = "copilot-proxy-model";
 
 let allModels = [];
 let selected = "";
+let agents = [];
 
 function toast(msg, isError) {
   const el = $("toast");
@@ -16,12 +17,74 @@ function toast(msg, isError) {
   toast._t = setTimeout(() => (el.textContent = ""), 2600);
 }
 
+function agentSnippet(id, base) {
+  if (id === "copilot") {
+    return (
+      "# Copilot\n" +
+      '$env:COPILOT_PROVIDER_BASE_URL="' + base + '"\n' +
+      '$env:COPILOT_MODEL="' + MODEL_LABEL + '"\n' +
+      "copilot"
+    );
+  }
+  if (id === "codex") {
+    return (
+      "# Codex — uses the Responses API; the upstream must support /responses\n" +
+      '$env:CODEX_PROXY_KEY="proxy-managed"\n' +
+      "codex -c model_provider=proxy" +
+      " -c model_providers.proxy.base_url=" + base +
+      " -c model_providers.proxy.wire_api=responses" +
+      " -c model_providers.proxy.env_key=CODEX_PROXY_KEY" +
+      " -c model=" + MODEL_LABEL
+    );
+  }
+  return "";
+}
+
+// Commands only for agents the upstream can actually serve.
 function commandsFor(listenAddr) {
-  return (
-    '$env:COPILOT_PROVIDER_BASE_URL="http://' + listenAddr + '"\n' +
-    '$env:COPILOT_MODEL="' + MODEL_LABEL + '"\n' +
-    "copilot"
-  );
+  const base = "http://" + listenAddr;
+  const blocks = agents
+    .filter((a) => a.enabled)
+    .map((a) => agentSnippet(a.id, base))
+    .filter(Boolean);
+  return blocks.length
+    ? blocks.join("\n\n")
+    : "# No launchable agent for this upstream's APIs.";
+}
+
+function renderAgents() {
+  const box = $("agentbtns");
+  box.innerHTML = "";
+  for (const a of agents) {
+    const btn = document.createElement("button");
+    btn.className = "green";
+    btn.textContent = "▶ Run " + a.label;
+    if (a.enabled) {
+      btn.addEventListener("click", () => runAgent(a.id, a.label));
+    } else {
+      btn.disabled = true;
+      btn.title = 'Needs a "' + a.api + '" endpoint — not served by this upstream';
+    }
+    box.appendChild(btn);
+  }
+}
+
+async function runAgent(agent, label) {
+  try {
+    await invoke("run_agent", { agent });
+    toast("Launched " + label + " in a new terminal.");
+  } catch (err) {
+    toast(String(err), true);
+  }
+}
+
+async function initAgents() {
+  try {
+    agents = await invoke("list_agents");
+  } catch (err) {
+    agents = [];
+  }
+  renderAgents();
 }
 
 function visibleModels() {
@@ -70,6 +133,7 @@ async function refresh() {
   const s = await invoke("get_state");
 
   $("endpoint").textContent = s.corporate_base_url;
+  $("apis").textContent = (s.upstream_apis || []).join(", ");
   $("listen").textContent = s.listen_addr;
   $("cmds").textContent = commandsFor(s.listen_addr);
 
@@ -130,14 +194,6 @@ $("refresh").addEventListener("click", () => fetchModels(true));
 $("search").addEventListener("input", renderModels);
 $("hidenonchat").addEventListener("change", renderModels);
 
-$("runcopilot").addEventListener("click", async () => {
-  try {
-    await invoke("run_copilot");
-    toast("Launched Copilot in a new terminal.");
-  } catch (err) {
-    toast(String(err), true);
-  }
-});
 
 $("copycmds").addEventListener("click", async () => {
   try {
@@ -148,6 +204,7 @@ $("copycmds").addEventListener("click", async () => {
   }
 });
 
-refresh();
+// Agents come from config (static at runtime) — fetch + render once.
+initAgents().then(refresh);
 // Poll so traffic stats stay live; the model list only re-renders on change.
 setInterval(refresh, 1500);

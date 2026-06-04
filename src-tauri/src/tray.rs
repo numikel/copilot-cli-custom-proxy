@@ -18,7 +18,7 @@ fn status_text(state: &AppState) -> String {
 }
 
 /// Builds the tray menu from the current state: status line, model toggles,
-/// then Refresh models / Run Copilot / Set API key / Quit.
+/// then Refresh models / Run <agent> (one per supported agent) / Settings / Quit.
 fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     let selected = state.selected_model();
 
@@ -42,7 +42,18 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "refresh_models", "Refresh models", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "run_copilot", "Run Copilot", true, None::<&str>)?)?;
+    // Only offer agents the configured upstream can actually serve.
+    for &agent in crate::commands::Agent::ALL {
+        if crate::commands::agent_supported(state, agent) {
+            menu.append(&MenuItem::with_id(
+                app,
+                format!("run::{}", agent.id()),
+                format!("Run {}", agent.label()),
+                true,
+                None::<&str>,
+            )?)?;
+        }
+    }
     menu.append(&MenuItem::with_id(app, "settings", "Open Settings…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
@@ -79,10 +90,12 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             let id = event.id().as_ref().to_string();
             if id == "quit" {
                 app.exit(0);
-            } else if id == "run_copilot" {
-                let state = app.state::<Arc<AppState>>();
-                if let Err(e) = crate::commands::launch_copilot(&state) {
-                    tracing::error!("failed to launch Copilot: {e}");
+            } else if let Some(agent_id) = id.strip_prefix("run::") {
+                if let Some(kind) = crate::commands::Agent::from_id(agent_id) {
+                    let state = app.state::<Arc<AppState>>();
+                    if let Err(e) = crate::commands::launch_agent(&state, kind) {
+                        tracing::error!("failed to launch {agent_id}: {e}");
+                    }
                 }
             } else if id == "settings" {
                 if let Some(window) = app.get_webview_window("settings") {
