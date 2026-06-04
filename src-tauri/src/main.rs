@@ -5,46 +5,108 @@ mod commands;
 mod startup_error;
 mod tray;
 
-use proxy_core::{AppState, Config};
-use startup_error::{exit_with_startup_error, show_startup_error, ConfigLoadError};
-use std::path::PathBuf;
-use std::sync::Arc;
+use proxy_core::{AppState, Config, RuntimeConfig};
+use startup_error::show_startup_error;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tauri::{async_runtime::JoinHandle, AppHandle, Manager};
 
-/// Locations searched for `config.toml`: next to the executable,
-/// then in the current working directory.
-fn config_candidates() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+/// Handle to the background proxy task, kept in Tauri-managed state so the
+/// listen-address command can abort and respawn it. Lives in the GUI crate to
+/// keep `proxy-core` free of Tauri dependencies.
+pub struct ProxyTask(pub Mutex<Option<JoinHandle<()>>>);
+
+/// Directories searched for `config.json` / `config.toml` / `ui_state.json`:
+/// next to the executable, then the current working directory.
+fn candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            paths.push(dir.join("config.toml"));
+            dirs.push(dir.to_path_buf());
         }
     }
-    paths.push(PathBuf::from("config.toml"));
-    paths
+    dirs.push(PathBuf::from("."));
+    dirs
 }
 
-fn load_config() -> Result<(Config, PathBuf), ConfigLoadError> {
-    let candidates = config_candidates();
-    for path in &candidates {
-        if !path.exists() {
-            continue;
+/// Resolves the runtime config at startup:
+/// 1. an existing `config.json` (the source of truth), else
+/// 2. a legacy `config.toml`, migrated and seeded into `config.json`, else
+/// 3. built-in defaults.
+///
+/// Returns the config, the directory its `config.json` lives in, and whether
+/// the app needs first-run setup (no usable endpoint yet → show settings).
+fn resolve_config() -> (RuntimeConfig, PathBuf, bool) {
+    let dirs = candidate_dirs();
+
+    for dir in &dirs {
+        let json = dir.join("config.json");
+        if json.exists() {
+            if let Some(cfg) = RuntimeConfig::load(&json) {
+                tracing::info!("loaded config.json from {}", json.display());
+                let needs_setup = !cfg.is_configured();
+                return (cfg, dir.clone(), needs_setup);
+            }
+            tracing::warn!("config.json at {} is unreadable — ignoring", json.display());
         }
-        let config = Config::load(path).map_err(|e| ConfigLoadError::Invalid {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
-        tracing::info!("loaded configuration from {}", path.display());
-        return Ok((config, path.clone()));
     }
-    Err(ConfigLoadError::NotFound { candidates })
+
+    for dir in &dirs {
+        let toml = dir.join("config.toml");
+        if toml.exists() {
+            match Config::load(&toml) {
+                Ok(legacy) => {
+                    let cfg = legacy.into_runtime();
+                    let json = dir.join("config.json");
+                    if let Err(e) = cfg.save(&json) {
+                        tracing::warn!("failed to seed config.json: {e}");
+                    } else {
+                        tracing::info!("migrated {} → {}", toml.display(), json.display());
+                    }
+                    let needs_setup = !cfg.is_configured();
+                    return (cfg, dir.clone(), needs_setup);
+                }
+                Err(e) => {
+                    tracing::warn!("ignoring unparseable config.toml at {}: {e}", toml.display())
+                }
+            }
+        }
+    }
+
+    let dir = candidate_dirs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("."));
+    tracing::info!("no config found — starting with defaults (first-run setup)");
+    (RuntimeConfig::default(), dir, true)
 }
 
-/// UI preferences live next to `config.toml` (or the cwd as a fallback).
-fn ui_state_path(config_path: &std::path::Path) -> PathBuf {
-    config_path
-        .parent()
-        .map(|dir| dir.join("ui_state.json"))
-        .unwrap_or_else(|| PathBuf::from("ui_state.json"))
+/// Spawns the background proxy server task for the current config.
+pub fn spawn_proxy(state: Arc<AppState>) -> JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = proxy_core::serve(state).await {
+            tracing::error!("proxy server stopped: {e}");
+        }
+    })
+}
+
+/// Aborts the running proxy task and respawns it (e.g. after a listen-address
+/// change), so the new address takes effect without restarting the app.
+pub fn restart_proxy(app: &AppHandle, state: Arc<AppState>) {
+    let task = app.state::<ProxyTask>();
+    let mut guard = task.0.lock().unwrap();
+    if let Some(handle) = guard.take() {
+        handle.abort();
+    }
+    *guard = Some(spawn_proxy(state));
+}
+
+fn ui_state_path(dir: &Path) -> PathBuf {
+    dir.join("ui_state.json")
+}
+
+fn config_json_path(dir: &Path) -> PathBuf {
+    dir.join("config.json")
 }
 
 fn main() {
@@ -55,18 +117,17 @@ fn main() {
         )
         .init();
 
-    let (config, config_path) = match load_config() {
-        Ok(loaded) => loaded,
-        Err(err) => exit_with_startup_error(err),
-    };
+    let (config, dir, needs_setup) = resolve_config();
 
     let state = Arc::new(AppState::new(config));
+    state.set_config_path(config_json_path(&dir));
     // Load persisted UI preferences (tray-visible models for this endpoint).
-    state.load_ui_state(ui_state_path(&config_path));
+    state.load_ui_state(ui_state_path(&dir));
     let proxy_state = state.clone();
 
     if let Err(e) = tauri::Builder::default()
         .manage(state)
+        .manage(ProxyTask(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::set_api_key,
@@ -75,17 +136,26 @@ fn main() {
             commands::run_agent,
             commands::list_agents,
             commands::refresh_models,
-            commands::set_visible_models
+            commands::set_visible_models,
+            commands::set_endpoint,
+            commands::set_listen_addr
         ])
         .setup(move |app| {
-            // The proxy server starts in the background, on the address from the config.
-            let serve_state = proxy_state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = proxy_core::serve(serve_state).await {
-                    tracing::error!("proxy server stopped: {e}");
-                }
-            });
+            // Start the proxy server in the background and keep its handle so the
+            // listen-address command can restart it.
+            let handle = spawn_proxy(proxy_state.clone());
+            *app.state::<ProxyTask>().0.lock().unwrap() = Some(handle);
+
             tray::build_tray(app)?;
+
+            // First run (or an unconfigured endpoint): open settings so the user
+            // can set the endpoint instead of facing a silent, idle tray icon.
+            if needs_setup {
+                if let Some(window) = app.get_webview_window("settings") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

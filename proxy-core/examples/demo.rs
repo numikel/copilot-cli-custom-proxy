@@ -7,7 +7,7 @@
 //! Run with: `cargo run -p proxy-core --example demo`
 
 use axum::{http::HeaderMap, routing::post, Json, Router};
-use proxy_core::{build_router, AppState, Config};
+use proxy_core::{build_router, classify_model, AppState, RuntimeConfig};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -36,16 +36,13 @@ async fn main() {
     println!("Endpoint stub (CORPORATE_URL): {upstream}");
 
     // 2) Proxy with the model and key set as the UI would set them.
-    let config = Config::from_str(&format!(
-        r#"
-listen_addr = "127.0.0.1:0"
-corporate_base_url = "{upstream}"
-default_model = "model-a"
-models = ["model-a", "model-b"]
-"#
-    ))
-    .unwrap();
+    let config = RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/chat/completions"),
+        default_model: Some("model-a".to_string()),
+    };
     let state = Arc::new(AppState::new(config));
+    state.set_models(vec![classify_model("model-a"), classify_model("model-b")]);
     state.set_api_key("DEMO-KEY");
     state.set_selected_model("model-b");
     let proxy = spawn(build_router(state)).await;

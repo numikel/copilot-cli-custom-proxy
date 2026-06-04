@@ -7,7 +7,10 @@
 /src-tauri/gen
 /src-tauri/target
 
-# Local runtime config — may contain a private endpoint address / model names
+# Runtime config written by the settings window — holds the private endpoint URL
+config.json
+
+# Legacy/optional seed config — may contain a private endpoint address / model names
 /config.toml
 
 # UI preferences (tray-visible models, keyed by endpoint URL) — may reveal the

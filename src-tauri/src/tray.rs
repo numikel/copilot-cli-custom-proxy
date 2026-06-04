@@ -37,6 +37,9 @@ fn update_tray_icon(app: &AppHandle, active: bool) {
 }
 
 fn status_text(state: &AppState) -> String {
+    if state.active_api().is_none() {
+        return "Not configured — open Settings to set the endpoint".to_string();
+    }
     let models = state.models();
     if models.is_empty() {
         "No models — set API key, then Refresh models".to_string()

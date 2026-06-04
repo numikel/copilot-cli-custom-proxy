@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-06-04
+
+### Added
+- **In-app configuration** — the endpoint and the local listen address are now
+  set in the settings window (no `config.toml` editing required) and persist to
+  `config.json` next to the executable (`set_endpoint`, `set_listen_addr`
+  commands). The API key remains in memory only.
+- **Full-URL endpoint model with a chat ⟷ responses switch** — you enter the
+  complete upstream URL (e.g. `https://openrouter.ai/api/v1/responses`); the wire
+  API is **derived from the URL suffix** rather than declared separately. A
+  single-active switch in the settings window flips the suffix between
+  `/chat/completions` and `/responses`. Stopping the URL at `/v1` is rejected
+  (the API type would be ambiguous). New `proxy-core` module `settings.rs`
+  (`RuntimeConfig`, `ApiKind`, `validate_endpoint_url`, `validate_listen_addr`).
+- **Graceful first run** — a missing config no longer shows an error and exits;
+  the app starts with defaults and opens the settings window so you can configure
+  the endpoint.
+- **Live listen-address changes** — changing the address restarts only the
+  background proxy task (abort + respawn), without restarting the app or terminal.
+
+### Changed
+- `AppState` now holds a mutable `RuntimeConfig` (endpoint URL + listen address +
+  default model) with accessors (`endpoint_url()`, `base_url()`, `models_url()`,
+  `active_api()`, `listen_addr()`) and persistence via `set_config_path`.
+- Agent gating is now based on the single **active** API (derived from the
+  endpoint URL): exactly one of Copilot/Codex is enabled at a time.
+- `StateView` drops `corporate_base_url` / `upstream_apis`; adds `endpoint_url`
+  and `active_api`.
+- `config.toml` is now an **optional one-time seed**: on first run it is migrated
+  into `config.json` (base URL + first API → full endpoint URL), then ignored.
+
+### Migration
+- Existing `config.toml` installs keep working: the first 0.3.0 launch migrates
+  them to `config.json`. `config.json` is gitignored.
+
 ## [0.2.0] — 2026-06-04
 
 ### Added

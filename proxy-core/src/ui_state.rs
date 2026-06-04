@@ -2,7 +2,7 @@
 //! `ui_state.json`. Unlike the API key (memory only), these are non-secret user
 //! choices that should survive a restart.
 //!
-//! The tray-visibility selection is keyed by endpoint (`corporate_base_url`):
+//! The tray-visibility selection is keyed by endpoint (the endpoint base URL):
 //! different upstreams expose different catalogs, so each remembers its own set
 //! of models shown in the tray's "Models" submenu.
 
