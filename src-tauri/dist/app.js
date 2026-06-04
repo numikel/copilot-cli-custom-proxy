@@ -420,6 +420,9 @@ async function applyEndpoint(url) {
     // set — refetches models, returning the resulting StateView.
     const s = await invoke("set_endpoint", { url: url.trim() });
     adoptState(s);
+    // Agent gating depends on the active API, which just changed — reload it so
+    // the right CLI (Copilot for chat / Codex for responses) enables.
+    await loadAgents().catch(() => {});
     render();
     toast(`Endpoint set — ${ui.activeApi || "?"} API.`);
   } catch (e) {
