@@ -13,24 +13,43 @@ mod ui_state;
 
 pub use config::{Config, ConfigError};
 pub use models::{classify_model, ModelInfo, ModelKind};
-pub use proxy::{build_router, fetch_models};
+pub use proxy::{build_router, fetch_models, fetch_models_from};
 pub use settings::{
     validate_endpoint_url, validate_listen_addr, ApiKind, RuntimeConfig, DEFAULT_LISTEN_ADDR,
 };
 pub use state::{AppState, RequestLog};
 pub use ui_state::UiStateFile;
 
+use std::future::Future;
 use std::sync::Arc;
 
-/// Runs the proxy server on the address from the current runtime config. Blocks
-/// until it ends (or is aborted by the host on a listen-address change).
+/// Runs the proxy server on the address from the current runtime config, binding
+/// the listener itself. Convenience wrapper over [`serve_with`] that never
+/// shuts down on its own (the future stays pending) — used where the caller
+/// does not manage a separate shutdown signal.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(&state.listen_addr()).await?;
+    serve_with(listener, state, std::future::pending()).await
+}
+
+/// Runs the proxy server on an already-bound listener, shutting down gracefully
+/// when `shutdown` resolves. Binding outside this function lets the host
+/// surface bind errors (e.g. address in use) before tearing down a running
+/// server, and the graceful shutdown lets the old server release its port
+/// before a replacement is spawned.
+pub async fn serve_with(
+    listener: tokio::net::TcpListener,
+    state: Arc<AppState>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
     warn_on_insecure_config(&state);
-    let addr = state.listen_addr();
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("proxy listening on http://{addr}");
+    if let Ok(addr) = listener.local_addr() {
+        tracing::info!("proxy listening on http://{addr}");
+    }
     let router = build_router(state);
-    axum::serve(listener, router).await
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 /// Logs warnings for configurations that could leak the API key. The proxy

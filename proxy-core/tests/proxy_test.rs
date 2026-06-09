@@ -256,6 +256,54 @@ async fn unconfigured_endpoint_returns_502() {
 }
 
 #[tokio::test]
+async fn reconfigures_endpoint_and_forwards_to_new_upstream() {
+    // Two independent upstreams; the echo reports the Host it saw, so we can tell
+    // which one a request actually reached.
+    let upstream_a = spawn(Router::new().route("/chat/completions", post(echo))).await;
+    let upstream_b = spawn(Router::new().route("/chat/completions", post(echo))).await;
+
+    let state = Arc::new(AppState::new(config_for(&upstream_a)));
+    state.set_models(vec![classify_model("model-a"), classify_model("model-b")]);
+    state.set_api_key("k");
+    assert!(state.set_selected_model("model-b"));
+
+    let proxy = spawn(build_router(state.clone())).await;
+    let client = reqwest::Client::new();
+
+    // Before reconfiguration: request hits upstream A.
+    let resp = client
+        .post(format!("{proxy}/chat/completions"))
+        .json(&json!({ "model": "original", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["host"], upstream_a.trim_start_matches("http://"));
+    assert_eq!(v["model"], "model-b");
+
+    // Live swap to upstream B; model-b is still in the new catalog → selection
+    // is preserved (never reset to an empty model).
+    state.swap_endpoint(
+        format!("{upstream_b}/chat/completions"),
+        vec![classify_model("model-b"), classify_model("model-c")],
+    );
+    assert_eq!(state.selected_model(), "model-b");
+
+    // After reconfiguration: the same proxy now forwards to upstream B.
+    let resp = client
+        .post(format!("{proxy}/chat/completions"))
+        .json(&json!({ "model": "original", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["host"], upstream_b.trim_start_matches("http://"));
+    assert_eq!(v["model"], "model-b");
+    // Crucially, never an empty model string mid-swap.
+    assert_ne!(v["model"], "");
+}
+
+#[tokio::test]
 async fn streams_response_through() {
     async fn stream_sse() -> Response {
         let chunks: Vec<Result<Bytes, std::io::Error>> = vec![

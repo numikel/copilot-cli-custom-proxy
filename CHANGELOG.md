@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-06-09
+
+### Security
+- **Strict listen-address validation** — the host part of the listen address is
+  now restricted to a conservative character set (letters, digits, `-`, `.`, and
+  bracketed IPv6 literals), and the port must be 1–65535. This prevents shell
+  metacharacters from reaching the launched CLI's command line. As
+  defence-in-depth, the proxy base URL passed to the Codex launcher is wrapped in
+  a quoted string (and rejected outright if it contains a quote).
+- **Endpoint URLs may no longer embed credentials** — a `user:pass@host` authority
+  is rejected, so a key accidentally pasted into the URL can't be persisted to
+  `config.json` or written to logs.
+- **Config is re-validated on startup** — a hand-edited or swapped-out
+  `config.json` is sanitized when loaded: an invalid listen address falls back to
+  the loopback default and an invalid endpoint URL is cleared (opening setup),
+  rather than being trusted blindly.
+
+### Fixed
+- **No more empty `model` during an endpoint change** — switching the endpoint
+  now fetches the new catalog *before* swapping, then replaces the URL and model
+  list atomically. Previously a request landing mid-switch could be forwarded with
+  an empty model field. The current selection is preserved when it still exists in
+  the new catalog.
+- **Reliable proxy restart on listen-address change** — the background server is
+  now shut down gracefully (releasing its port) before the replacement binds, and
+  the new address is bound up front so a failure (e.g. the port is already in use)
+  is reported in the UI instead of silently leaving the proxy down. Re-confirming
+  the same address is a no-op.
+
+### Changed
+- `proxy-core` adds `fetch_models_from` (probe a candidate endpoint without
+  mutating state), `AppState::swap_endpoint` (atomic URL + catalog swap), and
+  `serve_with` (run on a pre-bound listener with graceful shutdown). `serve`
+  becomes a thin wrapper over `serve_with`.
+- `set_listen_addr` is now async (binds the new address before restarting).
+
 ## [0.3.0] — 2026-06-04
 
 ### Added
