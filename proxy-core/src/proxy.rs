@@ -38,9 +38,7 @@ const SKIPPED_RESPONSE_HEADERS: &[&str] = &[
 
 /// Builds the Axum router: any path/method goes to the transparent proxy.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .fallback(any(proxy_handler))
-        .with_state(state)
+    Router::new().fallback(any(proxy_handler)).with_state(state)
 }
 
 /// Whether a client peer may use the proxy. Loopback peers always may (the
@@ -48,7 +46,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// reachable when the user opted into network exposure — must present the
 /// gateway token as `Authorization: Bearer <token>`. Fails closed: no token
 /// configured ⇒ no non-loopback client is allowed.
-pub(crate) fn peer_is_authorized(peer: IpAddr, provided: Option<&str>, token: Option<&str>) -> bool {
+pub(crate) fn peer_is_authorized(
+    peer: IpAddr,
+    provided: Option<&str>,
+    token: Option<&str>,
+) -> bool {
     if peer.is_loopback() {
         return true;
     }
@@ -109,7 +111,6 @@ pub async fn fetch_models_from(
     let probe = RuntimeConfig {
         listen_addr: String::new(),
         endpoint_url: endpoint_url.to_string(),
-        default_model: None,
         ..RuntimeConfig::default()
     };
     let url = probe
@@ -195,16 +196,15 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
     };
 
     // Resolve the upstream base from the configured endpoint URL.
-    let base = match state.base_url() {
-        Some(b) => b,
-        None => {
-            return error_response(
+    let base =
+        match state.base_url() {
+            Some(b) => b,
+            None => return error_response(
                 StatusCode::BAD_GATEWAY,
                 "No endpoint configured. Open the app's settings window and set the endpoint URL."
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
 
     // Replace the `model` field with the model selected in the tray.
     let model = state.selected_model();
@@ -328,7 +328,11 @@ mod tests {
     fn loopback_peer_never_needs_a_token() {
         assert!(peer_is_authorized(LOOPBACK, None, None));
         assert!(peer_is_authorized(LOOPBACK, None, Some("secret")));
-        assert!(peer_is_authorized(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), None, None));
+        assert!(peer_is_authorized(
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            None,
+            None
+        ));
     }
 
     #[test]
@@ -339,8 +343,16 @@ mod tests {
         // Missing / wrong header → rejected.
         assert!(!peer_is_authorized(LAN, None, Some("secret")));
         assert!(!peer_is_authorized(LAN, Some("secret"), Some("secret"))); // no "Bearer " prefix
-        assert!(!peer_is_authorized(LAN, Some("Bearer nope"), Some("secret")));
+        assert!(!peer_is_authorized(
+            LAN,
+            Some("Bearer nope"),
+            Some("secret")
+        ));
         // Correct token → allowed.
-        assert!(peer_is_authorized(LAN, Some("Bearer secret"), Some("secret")));
+        assert!(peer_is_authorized(
+            LAN,
+            Some("Bearer secret"),
+            Some("secret")
+        ));
     }
 }

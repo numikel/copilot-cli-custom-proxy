@@ -142,13 +142,21 @@ mod tests {
 
     #[test]
     fn classifies_moderation() {
-        assert_eq!(kind_of("omni-moderation-latest"), Some(ModelKind::Moderation));
+        assert_eq!(
+            kind_of("omni-moderation-latest"),
+            Some(ModelKind::Moderation)
+        );
         assert_eq!(kind_of("llama-guard-3-8b"), Some(ModelKind::Moderation));
     }
 
     #[test]
     fn treats_unknown_as_chat() {
-        for id in ["gpt-4o", "claude-3-7-sonnet", "o1-preview", "gemini-2.0-flash"] {
+        for id in [
+            "gpt-4o",
+            "claude-3-7-sonnet",
+            "o1-preview",
+            "gemini-2.0-flash",
+        ] {
             let m = classify_model(id);
             assert!(m.chat, "{id} should be a chat model");
             assert_eq!(m.kind, None);

@@ -28,6 +28,8 @@ corporate_base_url = "https://your-endpoint.example.com/v1"
 #   "responses" -> /responses         (e.g. Codex CLI)
 upstream_apis = ["chat"]
 
-# Optional model selected at startup. The model list itself is fetched from
-# {endpoint base}/models once you enter your API key (and via "Refresh models").
-# default_model = "model-a"
+# NOTE: `default_model` is deprecated and no longer honored. The active model is
+# now remembered per-endpoint in `ui_state.json` (set it from the tray or the
+# settings window). The model list is fetched from {endpoint base}/models once
+# you enter your API key (and via "Refresh models").
+# default_model = "model-a"   # ignored if present

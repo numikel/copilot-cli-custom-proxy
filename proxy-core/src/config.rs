@@ -11,8 +11,9 @@ pub struct Config {
     pub listen_addr: String,
     /// Base URL of the OpenAI-compatible corporate endpoint.
     pub corporate_base_url: String,
-    /// Model that is active at startup. Optional — if omitted, the first
-    /// available model (static list or fetched from the endpoint) is used.
+    /// Legacy field, parsed for `config.toml` back-compat but **no longer
+    /// honored**: the active model is now remembered per-endpoint in
+    /// `ui_state.json`, so this is not forwarded into the runtime config.
     #[serde(default)]
     pub default_model: Option<String>,
     /// Optional static list of models. If empty, the list is fetched from
@@ -121,7 +122,6 @@ impl Config {
         crate::settings::RuntimeConfig {
             listen_addr: self.listen_addr,
             endpoint_url: format!("{base}{}", api.suffix()),
-            default_model: self.default_model,
             ..crate::settings::RuntimeConfig::default()
         }
     }
@@ -167,7 +167,10 @@ mod tests {
 
         // Single "chat" API → /chat/completions suffix.
         let chat = Config::from_str(MINIMAL).unwrap().into_runtime();
-        assert_eq!(chat.endpoint_url, "https://e.example.com/v1/chat/completions");
+        assert_eq!(
+            chat.endpoint_url,
+            "https://e.example.com/v1/chat/completions"
+        );
         assert_eq!(chat.active_api(), Some(ApiKind::Chat));
         assert_eq!(chat.listen_addr, "127.0.0.1:8080");
 

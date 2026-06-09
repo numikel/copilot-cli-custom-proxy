@@ -57,6 +57,14 @@ pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
 /// URL and catalog are swapped atomically. On a fetch error the new URL is
 /// still committed with an empty catalog (the user picked it deliberately;
 /// Refresh recovers once the network is back). Rebuilds the tray.
+///
+/// The background proxy is **not** restarted here, by design: `proxy_handler`
+/// reads `base_url()` from the shared `AppState` per request, so the new
+/// endpoint takes effect immediately for every subsequent request. The only
+/// window is a single request already in flight (its target URL was built
+/// before the swap), which completes against the old upstream — acceptable, and
+/// far cheaper than draining in-flight requests on every endpoint change. (A
+/// restart *is* needed for `set_listen_addr`, which rebinds the socket.)
 #[tauri::command]
 pub async fn set_endpoint(app: AppHandle, url: String) -> Result<StateView, String> {
     let url = url.trim().to_string();
@@ -101,9 +109,11 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
     // only allowed once the user has opted into exposure (which also mints the
     // gateway token).
     if !proxy_core::is_loopback_listen_addr(&addr) && !state.expose_to_network() {
-        return Err("This address is not loopback. Enable \"Expose to network\" \
+        return Err(
+            "This address is not loopback. Enable \"Expose to network\" \
                     first to bind beyond 127.0.0.1."
-            .to_string());
+                .to_string(),
+        );
     }
 
     if !listen_addr_changed(&state.listen_addr(), &addr) {
@@ -112,10 +122,14 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
 
     // Bind the new address before touching the running server. A different
     // address never collides with the old one; a failure here leaves the old
-    // server intact (safe rollback) and is reported to the UI.
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
+    // server intact (safe rollback) and is reported to the UI. The std socket is
+    // handed to `ProxyTask::spawn`, which registers it with the reactor inside
+    // the runtime.
+    let listener = std::net::TcpListener::bind(&addr)
         .map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("cannot configure proxy socket {addr}: {e}"))?;
 
     state.set_listen_addr(addr);
     let task = app.state::<crate::ProxyTask>();
@@ -163,15 +177,22 @@ pub fn regenerate_proxy_token(app: AppHandle) -> Result<StateView, String> {
     Ok(state_view(&state))
 }
 
+/// Stores the upstream API key in memory and rebuilds the tray so its icon
+/// reflects readiness (active once a key is set and a model is selected).
 #[tauri::command]
-pub fn set_api_key(state: State<'_, Arc<AppState>>, key: String) {
+pub fn set_api_key(app: AppHandle, key: String) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
     state.set_api_key(key);
+    let _ = crate::tray::apply_menu(&app);
 }
 
-/// Clears the in-memory API key (the settings window's "forget" action).
+/// Clears the in-memory API key (the settings window's "forget" action) and
+/// rebuilds the tray so its icon drops back to the idle state.
 #[tauri::command]
-pub fn forget_api_key(state: State<'_, Arc<AppState>>) {
+pub fn forget_api_key(app: AppHandle) {
+    let state = app.state::<Arc<AppState>>().inner().clone();
     state.set_api_key("");
+    let _ = crate::tray::apply_menu(&app);
 }
 
 /// Fetches the model list from the configured endpoint's `/models`, stores it,
@@ -185,9 +206,14 @@ pub async fn refresh_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     Ok(models)
 }
 
+/// Selects the active model (from the settings window) and rebuilds the tray so
+/// its checkmark and icon match — the same refresh the tray's own model handler
+/// does. The choice is persisted per-endpoint by `set_selected_model`.
 #[tauri::command]
-pub fn set_model(state: State<'_, Arc<AppState>>, model: String) -> Result<(), String> {
+pub fn set_model(app: AppHandle, model: String) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
     if state.set_selected_model(model.clone()) {
+        let _ = crate::tray::apply_menu(&app);
         Ok(())
     } else {
         Err(format!("unknown model: {model}"))
@@ -407,7 +433,6 @@ mod tests {
         AppState::new(RuntimeConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             endpoint_url: url.to_string(),
-            default_model: None,
             ..RuntimeConfig::default()
         })
     }

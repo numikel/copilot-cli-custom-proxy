@@ -1,5 +1,8 @@
 // On Windows in release mode hides the console — the app lives in the tray.
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod commands;
 mod startup_error;
@@ -34,9 +37,22 @@ impl ProxyTask {
     /// Spawns the proxy server on an already-bound listener, wiring up a
     /// graceful-shutdown channel. Replaces any previously stored handle/sender
     /// (call [`ProxyTask::stop`] first to tear the old one down cleanly).
-    pub fn spawn(&self, listener: TcpListener, state: Arc<AppState>) {
+    pub fn spawn(&self, std_listener: std::net::TcpListener, state: Arc<AppState>) {
         let (tx, rx) = oneshot::channel::<()>();
         let handle = tauri::async_runtime::spawn(async move {
+            // Register the listener with the reactor *inside* the runtime:
+            // `TcpListener::from_std` calls `Handle::current()` and panics if no
+            // Tokio runtime is running, which is exactly the case in Tauri's
+            // synchronous `setup` callback. Doing it here (on the spawned task)
+            // keeps the std-bind error surfacing at the call site while moving
+            // the reactor registration into a valid runtime context.
+            let listener = match TcpListener::from_std(std_listener) {
+                Ok(listener) => listener,
+                Err(e) => {
+                    tracing::error!("failed to register proxy listener: {e}");
+                    return;
+                }
+            };
             // Resolves when the sender fires *or* is dropped — either way the
             // server shuts down.
             let shutdown = async {
@@ -160,13 +176,19 @@ fn resolve_config() -> (RuntimeConfig, PathBuf, bool) {
                     return (cfg, dir.clone(), needs_setup);
                 }
                 Err(e) => {
-                    tracing::warn!("ignoring unparseable config.toml at {}: {e}", toml.display())
+                    tracing::warn!(
+                        "ignoring unparseable config.toml at {}: {e}",
+                        toml.display()
+                    )
                 }
             }
         }
     }
 
-    let dir = candidate_dirs()
+    // Reuse the directory list already gathered above (the loops only borrowed
+    // it), rather than re-probing `current_exe()` — the candidates can't have
+    // changed mid-resolution.
+    let dir = dirs
         .into_iter()
         .next()
         .unwrap_or_else(|| PathBuf::from("."));
@@ -216,15 +238,17 @@ fn main() {
             commands::regenerate_proxy_token
         ])
         .setup(move |app| {
-            // Bind the listener synchronously (no async runtime needed yet) so a
-            // bind failure surfaces as a startup error, then hand it to the proxy
-            // task. Kept as a managed handle so set_listen_addr can restart it.
+            // Bind the listener synchronously so a bind failure surfaces as a
+            // startup error, then hand the std socket to the proxy task — which
+            // converts it to a Tokio listener inside the runtime (see
+            // `ProxyTask::spawn`). Kept as a managed handle so set_listen_addr
+            // can restart it.
             let addr = proxy_state.listen_addr();
             let std_listener = std::net::TcpListener::bind(&addr)
                 .map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
             std_listener.set_nonblocking(true)?;
-            let listener = TcpListener::from_std(std_listener)?;
-            app.state::<ProxyTask>().spawn(listener, proxy_state.clone());
+            app.state::<ProxyTask>()
+                .spawn(std_listener, proxy_state.clone());
 
             tray::build_tray(app)?;
 
@@ -247,7 +271,10 @@ fn main() {
         })
         .run(tauri::generate_context!())
     {
-        show_startup_error("Copilot Proxy", &format!("Failed to start the application:\n\n{e}"));
+        show_startup_error(
+            "Copilot Proxy",
+            &format!("Failed to start the application:\n\n{e}"),
+        );
         std::process::exit(1);
     }
 }
@@ -263,7 +290,8 @@ mod tests {
     #[test]
     fn proxy_task_stop_releases_port() {
         tauri::async_runtime::block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
             let addr = listener.local_addr().unwrap();
 
             let state = Arc::new(AppState::new(RuntimeConfig::default()));
@@ -273,8 +301,7 @@ mod tests {
             // Graceful stop must release the socket before returning.
             task.stop().await;
 
-            std::net::TcpListener::bind(addr)
-                .expect("port should be free after ProxyTask::stop()");
+            std::net::TcpListener::bind(addr).expect("port should be free after ProxyTask::stop()");
         });
     }
 }

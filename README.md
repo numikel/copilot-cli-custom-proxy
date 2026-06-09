@@ -1,5 +1,11 @@
 # Copilot CLI Custom Proxy
 
+[![CI](https://github.com/numikel/copilot-cli-custom-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/numikel/copilot-cli-custom-proxy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)
+![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)
+![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri)
+
 A local HTTP proxy that lives in the system tray (Windows) for **GitHub Copilot
 CLI**. It intercepts requests, **swaps the LLM model on the fly**, and forwards
 them to a configured OpenAI-compatible endpoint — without restarting your
@@ -102,7 +108,8 @@ cargo tauri build
 ```
 
 On launch the app minimizes to the tray. From the tray menu you can:
-- pick the active model (applied instantly),
+- pick the active model (applied instantly, and remembered per-endpoint across
+  restarts),
 - **"Refresh models"** — re-fetch the model list from the endpoint,
 - **"Run Copilot" / "Run Codex"** — open a new terminal with the proxy
   environment already set and start the chosen agent (see the Codex note below),
@@ -135,11 +142,12 @@ no network access. It has five sections:
 - **Model** — searchable list of the upstream catalog with a **"hide non-chat"**
   toggle. Models are classified in `proxy-core` (chat vs the `embed` / `image` /
   `audio` / `rerank` / `moderation` families) and tagged accordingly; clicking a
-  model applies it instantly. Each chat model has a **"show in tray" checkbox**
-  that controls whether it appears in the tray's Models submenu — with
-  **all / none** shortcuts and **shift-click** range selection. The choice is
-  saved per-endpoint to `ui_state.json` (next to `config.toml`), so different
-  upstreams remember their own tray selection.
+  model applies it instantly — and the choice is **remembered per-endpoint** in
+  `ui_state.json`, so each upstream restores its own active model after a restart
+  (and switching endpoints back and forth). Each chat model has a **"show in tray"
+  checkbox** that controls whether it appears in the tray's Models submenu — with
+  **all / none** shortcuts and **shift-click** range selection. That tray-visibility
+  choice is likewise saved per-endpoint to `ui_state.json` (next to `config.toml`).
 - **Start agent** — one button per known agent, gated against the active
   endpoint's API (the incompatible agent is disabled with a tooltip explaining
   which API it needs). A copy-able PowerShell command block is shown too.

@@ -21,7 +21,8 @@ async fn spawn(router: Router) -> String {
 
 /// Upstream stub: echoes back what it saw (model, headers).
 async fn echo(headers: HeaderMap, body: Bytes) -> Json<serde_json::Value> {
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     Json(json!({
         "model": parsed.get("model"),
         "authorization": headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -36,7 +37,6 @@ fn config_for(upstream: &str) -> RuntimeConfig {
     RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
-        default_model: Some("model-a".to_string()),
         ..RuntimeConfig::default()
     }
 }
@@ -47,7 +47,6 @@ fn fetch_config_for(upstream: &str) -> RuntimeConfig {
     RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
-        default_model: None,
         ..RuntimeConfig::default()
     }
 }
@@ -194,7 +193,10 @@ async fn fetch_models_classifies_mixed_kinds() {
         .iter()
         .find(|m| m.id == "text-embedding-3-large")
         .unwrap();
-    assert!(!emb.chat, "text-embedding-3-large should not be a chat model");
+    assert!(
+        !emb.chat,
+        "text-embedding-3-large should not be a chat model"
+    );
     assert_eq!(emb.kind, Some(ModelKind::Embed));
 
     // whisper-1 → audio (non-chat)
@@ -217,7 +219,6 @@ async fn forwards_to_base_derived_from_responses_endpoint() {
     let config = RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/responses"),
-        default_model: Some("model-a".to_string()),
         ..RuntimeConfig::default()
     };
     let state = Arc::new(AppState::new(config));
@@ -322,7 +323,9 @@ async fn serve_with_lets_loopback_through_without_a_token() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        proxy_core::serve_with(listener, state, std::future::pending()).await.unwrap();
+        proxy_core::serve_with(listener, state, std::future::pending())
+            .await
+            .unwrap();
     });
     let proxy = format!("http://{addr}");
 
