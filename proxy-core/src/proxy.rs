@@ -111,7 +111,6 @@ pub async fn fetch_models_from(
     let probe = RuntimeConfig {
         listen_addr: String::new(),
         endpoint_url: endpoint_url.to_string(),
-        default_model: None,
         ..RuntimeConfig::default()
     };
     let url = probe

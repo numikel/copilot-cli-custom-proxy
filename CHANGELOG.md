@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] — 2026-06-09
+
+### Fixed
+- **Your active model is now remembered** — the model picked in the tray (or the
+  settings window) is saved **per-endpoint** in `ui_state.json` and restored on
+  the next launch, instead of resetting to the first model in the catalog.
+  Switching endpoints back and forth restores each one's own last choice.
+- **Tray icon reflects key changes immediately** — setting or forgetting the API
+  key now rebuilds the tray, so the icon switches between its ready and idle
+  states right away (previously it only updated on the next unrelated tray
+  action). Picking a model from the settings window likewise refreshes the tray
+  checkmark and icon.
+
+### Changed
+- The active-model preference moved out of `config.json` (`default_model`) into
+  the per-endpoint `ui_state.json`. A `default_model` left in a legacy
+  `config.toml` is parsed but ignored — it is no longer migrated forward.
+- Internal: `set_api_key` / `forget_api_key` / `set_model` commands take
+  `AppHandle` and refresh the tray; `resolve_config` reuses its directory list
+  instead of re-probing the executable path.
+
 ## [0.3.2] — 2026-06-09
 
 ### Security

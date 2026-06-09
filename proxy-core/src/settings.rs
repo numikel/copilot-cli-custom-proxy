@@ -55,10 +55,6 @@ pub struct RuntimeConfig {
     /// (e.g. "https://openrouter.ai/api/v1/responses"). Empty = not configured.
     #[serde(default)]
     pub endpoint_url: String,
-    /// Model active at startup. Optional — the first available model is used
-    /// otherwise.
-    #[serde(default)]
-    pub default_model: Option<String>,
     /// Opt-in to binding the proxy beyond loopback. Off by default: the proxy
     /// injects the API key into every request, so a non-loopback bind would
     /// share that key with the whole network. When off, a non-loopback
@@ -82,7 +78,6 @@ impl Default for RuntimeConfig {
         Self {
             listen_addr: DEFAULT_LISTEN_ADDR.to_string(),
             endpoint_url: String::new(),
-            default_model: None,
             expose_to_network: false,
             proxy_token: None,
         }

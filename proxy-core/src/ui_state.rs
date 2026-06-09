@@ -2,9 +2,10 @@
 //! `ui_state.json`. Unlike the API key (memory only), these are non-secret user
 //! choices that should survive a restart.
 //!
-//! The tray-visibility selection is keyed by endpoint (the endpoint base URL):
-//! different upstreams expose different catalogs, so each remembers its own set
-//! of models shown in the tray's "Models" submenu.
+//! Both the tray-visibility selection and the active-model choice are keyed by
+//! endpoint (the endpoint base URL): different upstreams expose different
+//! catalogs, so each remembers its own set of models shown in the tray's
+//! "Models" submenu and its own active model.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,6 +18,10 @@ pub struct UiStateFile {
     /// A missing entry means "not curated yet" (all chat models are shown).
     #[serde(default)]
     pub visible_models: HashMap<String, Vec<String>>,
+    /// endpoint url → id of the active (selected) model. A missing entry means
+    /// "no choice saved yet" → the first available model is used.
+    #[serde(default)]
+    pub selected_models: HashMap<String, String>,
 }
 
 impl UiStateFile {
@@ -92,6 +97,44 @@ mod tests {
     fn missing_or_corrupt_file_loads_empty() {
         let missing = std::env::temp_dir().join("copilot_proxy_uistate_absent_xyz.json");
         let _ = std::fs::remove_file(&missing);
-        assert!(UiStateFile::load(&missing).visible_models.is_empty());
+        let loaded = UiStateFile::load(&missing);
+        assert!(loaded.visible_models.is_empty());
+        assert!(loaded.selected_models.is_empty());
+    }
+
+    #[test]
+    fn roundtrips_selected_models_per_endpoint() {
+        let path = std::env::temp_dir().join("copilot_proxy_uistate_selected_test.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut file = UiStateFile::default();
+        file.selected_models
+            .insert("https://a.example/v1".into(), "m2".into());
+        file.selected_models
+            .insert("https://b.example/v1".into(), "x".into());
+        file.save(&path).unwrap();
+
+        let loaded = UiStateFile::load(&path);
+        assert_eq!(
+            loaded.selected_models.get("https://a.example/v1").unwrap(),
+            "m2"
+        );
+        assert_eq!(
+            loaded.selected_models.get("https://b.example/v1").unwrap(),
+            "x"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn old_file_without_selected_models_loads() {
+        // A file written by an older version (only `visible_models`) must still
+        // parse — `selected_models` defaults to empty via `#[serde(default)]`.
+        let path = std::env::temp_dir().join("copilot_proxy_uistate_legacy_test.json");
+        std::fs::write(&path, r#"{"visible_models":{"https://a/v1":["m1"]}}"#).unwrap();
+        let loaded = UiStateFile::load(&path);
+        assert_eq!(loaded.visible_models.get("https://a/v1").unwrap(), &vec!["m1".to_string()]);
+        assert!(loaded.selected_models.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 }

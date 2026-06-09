@@ -29,7 +29,7 @@ pub struct RequestLog {
 /// Tauri's state manager, so a model or key change in the UI is immediately
 /// visible to the proxy.
 pub struct AppState {
-    /// Live runtime configuration (endpoint, listen address, default model),
+    /// Live runtime configuration (endpoint, listen address, network exposure),
     /// edited in the settings window and persisted to `config.json`.
     config: Mutex<RuntimeConfig>,
     /// Where `config.json` persists; `None` disables saving (e.g. in tests).
@@ -61,12 +61,13 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: RuntimeConfig) -> Self {
         // Models are fetched from the endpoint once a key is set; start empty.
-        let selected_model = config.default_model.clone().unwrap_or_default();
+        // The active model starts empty too and is restored from `ui_state.json`
+        // (per-endpoint) the first time the catalog is loaded — see `set_models`.
         Self {
             config: Mutex::new(config),
             config_path: Mutex::new(None),
             models: Mutex::new(Vec::new()),
-            selected_model: Mutex::new(selected_model),
+            selected_model: Mutex::new(String::new()),
             api_key: Mutex::new(None),
             request_log: Mutex::new(RequestLog::default()),
             visible_models: Mutex::new(None),
@@ -116,6 +117,30 @@ impl AppState {
         cfg.base_url().unwrap_or_else(|| cfg.endpoint_url.clone())
     }
 
+    /// Reads the active-model selection persisted for `key` in `ui_state.json`,
+    /// if any. Best-effort and lock-free w.r.t. the state mutexes, so it is safe
+    /// to call *before* entering a critical section (e.g. in `swap_endpoint`).
+    fn persisted_selected(&self, key: &str) -> Option<String> {
+        let path = self.ui_state_path.lock().unwrap().clone()?;
+        UiStateFile::load(&path).selected_models.get(key).cloned()
+    }
+
+    /// Persists the active-model selection for the current endpoint to
+    /// `ui_state.json` (best-effort), serialized under `ui_io` exactly like
+    /// [`AppState::set_visible_models`] so concurrent writers can't lost-update.
+    fn persist_selected_model(&self, model: &str) {
+        let path = self.ui_state_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let _io = self.ui_io.lock().unwrap();
+            let key = self.endpoint_key();
+            let mut file = UiStateFile::load(&path);
+            file.selected_models.insert(key, model.to_string());
+            if let Err(e) = file.save(&path) {
+                tracing::warn!("failed to persist ui_state.json: {e}");
+            }
+        }
+    }
+
     /// Sets where `config.json` is persisted. Call once at startup.
     pub fn set_config_path(&self, path: PathBuf) {
         *self.config_path.lock().unwrap() = Some(path);
@@ -143,22 +168,27 @@ impl AppState {
 
     /// Atomically swaps the endpoint URL **and** its model catalog in a single
     /// critical section, keeping the current selection when it still exists in
-    /// the new catalog (otherwise the first model, or empty). This closes the
-    /// window the old `set_endpoint` + `set_models([])` sequence left open, in
-    /// which a request could read the new URL paired with an empty model.
+    /// the new catalog. When it does not, the new endpoint's own persisted
+    /// selection is restored if present, otherwise the first model (or empty).
+    /// This closes the window the old `set_endpoint` + `set_models([])` sequence
+    /// left open, in which a request could read the new URL paired with an empty
+    /// model.
     ///
-    /// Lock order is `config < models < selected` (consistent with
+    /// The persisted selection is read **before** the critical section (it does
+    /// disk I/O and must not run while the state locks are held). Lock order is
+    /// `config < models < selected` (consistent with
     /// [`AppState::set_selected_model`]); `persist_config` and
     /// `reload_visible_for_endpoint` run *after* the `config` lock is released
     /// because they re-acquire it (std `Mutex` is not reentrant).
     pub fn swap_endpoint(&self, url: String, models: Vec<ModelInfo>) {
+        let restored = self.persisted_selected(&key_for_endpoint(&url));
         {
             let mut config = self.config.lock().unwrap();
             let mut models_guard = self.models.lock().unwrap();
             let mut selected = self.selected_model.lock().unwrap();
             config.endpoint_url = url;
             if !models.iter().any(|m| m.id == *selected) {
-                *selected = models.first().map(|m| m.id.clone()).unwrap_or_default();
+                *selected = pick_selection(&models, restored.as_deref());
             }
             *models_guard = models;
         }
@@ -296,12 +326,16 @@ impl AppState {
     }
 
     /// Replaces the available model list (e.g. after fetching from the endpoint).
-    /// Keeps the current selection if still present, otherwise picks the first.
+    /// Keeps the current selection if still present; otherwise restores this
+    /// endpoint's persisted choice when it is in the new catalog, falling back
+    /// to the first model. This is what re-applies the saved active model after
+    /// a restart (the in-memory selection starts empty).
     pub fn set_models(&self, models: Vec<ModelInfo>) {
+        let restored = self.persisted_selected(&self.endpoint_key());
         {
             let mut selected = self.selected_model.lock().unwrap();
             if !models.iter().any(|m| m.id == *selected) {
-                *selected = models.first().map(|m| m.id.clone()).unwrap_or_default();
+                *selected = pick_selection(&models, restored.as_deref());
             }
         }
         *self.models.lock().unwrap() = models;
@@ -311,15 +345,17 @@ impl AppState {
         self.selected_model.lock().unwrap().clone()
     }
 
-    /// Sets the active model if it is present in the available list.
-    /// Returns `false` when the model is unknown.
+    /// Sets the active model if it is present in the available list, persisting
+    /// the choice per-endpoint to `ui_state.json` so it survives a restart.
+    /// Returns `false` when the model is unknown (nothing is persisted then).
     pub fn set_selected_model(&self, model: impl Into<String>) -> bool {
         let model = model.into();
         let known = self.models.lock().unwrap().iter().any(|m| m.id == model);
         if !known {
             return false;
         }
-        *self.selected_model.lock().unwrap() = model;
+        *self.selected_model.lock().unwrap() = model.clone();
+        self.persist_selected_model(&model);
         true
     }
 
@@ -363,6 +399,29 @@ impl AppState {
     pub fn request_log(&self) -> RequestLog {
         self.request_log.lock().unwrap().clone()
     }
+}
+
+/// The `ui_state.json` key for a candidate endpoint URL — its base (suffix
+/// stripped), or the raw URL when the suffix is unrecognized. Mirrors
+/// [`AppState::endpoint_key`] for a URL not yet committed to the config, so the
+/// new endpoint's persisted preferences can be read before the swap.
+fn key_for_endpoint(url: &str) -> String {
+    let probe = RuntimeConfig {
+        endpoint_url: url.to_string(),
+        ..RuntimeConfig::default()
+    };
+    probe.base_url().unwrap_or_else(|| url.to_string())
+}
+
+/// Picks the active model for a freshly loaded catalog: the persisted choice if
+/// it is present in the catalog, otherwise the first model, otherwise empty.
+fn pick_selection(models: &[ModelInfo], persisted: Option<&str>) -> String {
+    if let Some(p) = persisted {
+        if models.iter().any(|m| m.id == p) {
+            return p.to_string();
+        }
+    }
+    models.first().map(|m| m.id.clone()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -472,6 +531,87 @@ mod tests {
         let reloaded = state_with(&["gpt-4o", "claude-3"]);
         reloaded.load_ui_state(path.clone());
         assert_eq!(reloaded.visible_model_ids(), vec!["claude-3"]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn chat_state(endpoint: &str) -> AppState {
+        AppState::new(RuntimeConfig {
+            listen_addr: "127.0.0.1:0".to_string(),
+            endpoint_url: endpoint.to_string(),
+            ..RuntimeConfig::default()
+        })
+    }
+
+    #[test]
+    fn selected_model_persists_and_restores_per_endpoint() {
+        let path = std::env::temp_dir().join("copilot_proxy_selected_restore_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/chat/completions";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        // Picking a non-default model persists it.
+        assert!(state.set_selected_model("claude-3"));
+
+        // A fresh state on the same endpoint restores the persisted selection
+        // instead of defaulting to the first model — the in-memory selection
+        // starts empty and is re-applied when the catalog loads.
+        let reloaded = chat_state(endpoint);
+        reloaded.load_ui_state(path.clone());
+        assert_eq!(reloaded.selected_model(), "");
+        reloaded.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        assert_eq!(reloaded.selected_model(), "claude-3");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn swap_endpoint_restores_that_endpoints_persisted_selection() {
+        let path = std::env::temp_dir().join("copilot_proxy_selected_swap_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint_a = "https://a.example/v1/chat/completions";
+
+        let state = chat_state(endpoint_a);
+        state.load_ui_state(path.clone());
+        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        assert!(state.set_selected_model("claude-3")); // persisted for endpoint A
+
+        // Switch to endpoint B and persist a choice there.
+        state.swap_endpoint(
+            "https://b.example/v1/chat/completions".to_string(),
+            vec![classify_model("llama-3"), classify_model("mistral")],
+        );
+        assert!(state.set_selected_model("mistral"));
+
+        // Back to endpoint A: its persisted selection wins over the first model.
+        state.swap_endpoint(
+            endpoint_a.to_string(),
+            vec![classify_model("gpt-4o"), classify_model("claude-3")],
+        );
+        assert_eq!(state.selected_model(), "claude-3");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn restore_falls_back_to_first_when_persisted_absent_from_catalog() {
+        let path = std::env::temp_dir().join("copilot_proxy_selected_fallback_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/chat/completions";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        assert!(state.set_selected_model("claude-3"));
+
+        // A new catalog without claude-3: the persisted id is gone → first model.
+        state.swap_endpoint(
+            endpoint.to_string(),
+            vec![classify_model("llama-3"), classify_model("mistral")],
+        );
+        assert_eq!(state.selected_model(), "llama-3");
 
         let _ = std::fs::remove_file(&path);
     }

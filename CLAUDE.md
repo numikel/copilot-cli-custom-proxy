@@ -9,9 +9,10 @@ Cargo workspace, two members:
 
 - **`proxy-core/`** — GUI-independent core (fully testable). Axum reverse proxy
   that rewrites the `model` field and injects the API key.
-  - `settings.rs` — `RuntimeConfig { listen_addr, endpoint_url, default_model,
+  - `settings.rs` — `RuntimeConfig { listen_addr, endpoint_url,
     expose_to_network, proxy_token }` persisted to `config.json` (live source of
-    truth). `ApiKind { Chat, Responses }` is **derived from the endpoint URL
+    truth). The active model is **not** stored here — it is remembered
+    per-endpoint in `ui_state.json` (see `ui_state.rs`). `ApiKind { Chat, Responses }` is **derived from the endpoint URL
     suffix** (`/chat/completions` | `/responses`); `base_url()`/`models_url()`
     strip it. `validate_endpoint_url` (rejects URLs that stop at `/v1` **and**
     URLs with `user:pass@` credentials), `validate_listen_addr` (strict host
@@ -28,9 +29,12 @@ Cargo workspace, two members:
     `active_api()`, `listen_addr()`, `expose_to_network()`, `proxy_token()`,
     `set_endpoint()`, `set_listen_addr()`, `set_expose_to_network()` (mints a
     token on first enable), `regenerate_proxy_token()`, `swap_endpoint()` (atomic
-    URL + catalog swap, keeps the selection if it survives — closes the
-    empty-`model` race), `models()`, `chat_model_ids()`, `set_models()`. Persists
-    config on mutation.
+    URL + catalog swap; keeps the selection if it survives, else restores the new
+    endpoint's persisted choice, else first — closes the empty-`model` race),
+    `models()`, `chat_model_ids()`, `set_models()` (re-applies the persisted
+    per-endpoint selection when the in-memory one is empty/stale — this is how the
+    active model survives a restart), `set_selected_model()` (persists the choice
+    per-endpoint to `ui_state.json`). Persists config on mutation.
   - `models.rs` — `ModelInfo { id, chat, kind }`, `ModelKind`, and
     `classify_model(id)` (pure, id-heuristic, unit-tested; matches on **word
     tokens**, not raw substrings, so e.g. `watts-3b`/`vanguard-instruct` stay
@@ -47,11 +51,15 @@ Cargo workspace, two members:
     layer + `ConnectInfo<SocketAddr>` are wired in `lib.rs::serve_with`, **not**
     `build_router` (tests serve the bare router).
   - `config.rs` — legacy `Config` from `config.toml`; `into_runtime()` migrates it
-    to `RuntimeConfig` (seed only; `config.toml` is optional as of 0.3.0).
-  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to the config;
-    `AppState` keeps a per-endpoint tray-visible model set (`visible_model_ids()`,
-    `set_visible_models()`; `None` = all chat models). `load` logs corruption;
-    `save` is atomic. `ui_state.json` is gitignored.
+    to `RuntimeConfig` (seed only; `config.toml` is optional as of 0.3.0). Its
+    `default_model` is parsed for back-compat but **no longer forwarded** (the
+    active model is now a per-endpoint `ui_state.json` preference).
+  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to the config; two
+    per-endpoint maps keyed by endpoint base URL: a tray-visible model set
+    (`visible_model_ids()`, `set_visible_models()`; `None` = all chat models) and
+    the active-model selection (`selected_models`; restored on catalog load —
+    missing = first model). Both writes serialize under `ui_io`. `load` logs
+    corruption; `save` is atomic. `ui_state.json` is gitignored.
 - **`src-tauri/`** — Tauri v2 app.
   - `tray.rs` — native tray menu (status line, **"Models" submenu** of the
     endpoint's visible chat models, Refresh, Run <agent> for supported agents,
@@ -60,10 +68,15 @@ Cargo workspace, two members:
   - `commands.rs` — `#[tauri::command]`s: `get_state`, `set_api_key`,
     `forget_api_key`, `set_model`, `run_agent`, `list_agents`, `refresh_models`,
     `set_visible_models`, `set_endpoint`, `set_listen_addr` (both async;
-    `set_endpoint` probes + swaps atomically, `set_listen_addr` eagerly binds the
+    `set_endpoint` probes + swaps atomically — and **deliberately does not restart
+    the proxy** (routing reads `base_url()` per request; only an in-flight request
+    finishes against the old upstream), `set_listen_addr` eagerly binds the
     new address — a bind error surfaces to the UI — and rejects a non-loopback
     address unless `expose_to_network` is on; no-op when unchanged),
-    `set_expose_to_network` / `regenerate_proxy_token`. `local_base_url()` maps a
+    `set_expose_to_network` / `regenerate_proxy_token`. The commands that change
+    tray-visible state — `set_api_key`, `forget_api_key`, `set_model` — take
+    `AppHandle` and call `tray::apply_menu` so the icon/checkmark stay in sync
+    (same as `set_endpoint`/`set_listen_addr`). `local_base_url()` maps a
     wildcard/non-loopback listen address to `127.0.0.1:<port>` for the launched
     agents (loopback peer ⇒ no token needed). `Agent` enum + `agent_supported()`
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,

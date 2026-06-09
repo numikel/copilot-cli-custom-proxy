@@ -37,7 +37,6 @@ fn config_for(upstream: &str) -> RuntimeConfig {
     RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
-        default_model: Some("model-a".to_string()),
         ..RuntimeConfig::default()
     }
 }
@@ -48,7 +47,6 @@ fn fetch_config_for(upstream: &str) -> RuntimeConfig {
     RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
-        default_model: None,
         ..RuntimeConfig::default()
     }
 }
@@ -221,7 +219,6 @@ async fn forwards_to_base_derived_from_responses_endpoint() {
     let config = RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/responses"),
-        default_model: Some("model-a".to_string()),
         ..RuntimeConfig::default()
     };
     let state = Arc::new(AppState::new(config));
