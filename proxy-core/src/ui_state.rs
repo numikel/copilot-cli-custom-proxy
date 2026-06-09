@@ -22,19 +22,35 @@ pub struct UiStateFile {
 impl UiStateFile {
     /// Reads the file, returning an empty state if it is missing or unreadable.
     /// Persisted preferences are best-effort — a corrupt file must never block
-    /// startup.
+    /// startup — but a *corrupt* file (present, invalid JSON) is logged at
+    /// `warn` so a silently reset preference set is at least diagnosable.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-            Err(_) => Self::default(),
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                tracing::warn!("could not read ui_state at {}: {e}", path.display());
+                return Self::default();
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(state) => state,
+            Err(e) => {
+                tracing::warn!(
+                    "ui_state at {} is corrupt — resetting preferences: {e}",
+                    path.display()
+                );
+                Self::default()
+            }
         }
     }
 
-    /// Writes the state to disk (pretty-printed for easy hand-editing).
+    /// Writes the state to disk (pretty-printed for easy hand-editing), via an
+    /// atomic temp-write + rename so a crash mid-write can't truncate it.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, text)
+        crate::atomic_io::write_atomic(path, text.as_bytes())
     }
 }
 

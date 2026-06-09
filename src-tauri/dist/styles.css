@@ -152,6 +152,12 @@ html[data-theme="light"] .cp-btn--accent{color:#fff}
 .cp-key-note{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--text-3);line-height:1.3}
 .cp-key-note svg{color:var(--acc);flex:none}
 
+/* network-exposure gateway token */
+.cp-token{margin-top:9px;display:flex;flex-direction:column;gap:7px}
+.cp-token .cp-input{font-size:11.5px}
+.cp-token-note code{font-family:var(--mono);font-size:10px;color:var(--text-2)}
+.cp-token-note svg{color:var(--warn,var(--acc))}
+
 /* ───────────────────────── ENDPOINT: API mode switch ───────────────────────── */
 .cp-seg{display:flex;gap:4px;margin-top:9px;padding:3px;border-radius:calc(var(--r) - 2px);
   background:var(--surface-2);border:1px solid var(--line-2)}

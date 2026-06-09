@@ -37,6 +37,7 @@ fn config_for(upstream: &str) -> RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
         default_model: Some("model-a".to_string()),
+        ..RuntimeConfig::default()
     }
 }
 
@@ -47,6 +48,7 @@ fn fetch_config_for(upstream: &str) -> RuntimeConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
         default_model: None,
+        ..RuntimeConfig::default()
     }
 }
 
@@ -216,6 +218,7 @@ async fn forwards_to_base_derived_from_responses_endpoint() {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/responses"),
         default_model: Some("model-a".to_string()),
+        ..RuntimeConfig::default()
     };
     let state = Arc::new(AppState::new(config));
     state.set_models(vec![classify_model("model-a")]);
@@ -301,6 +304,42 @@ async fn reconfigures_endpoint_and_forwards_to_new_upstream() {
     assert_eq!(v["model"], "model-b");
     // Crucially, never an empty model string mid-swap.
     assert_ne!(v["model"], "");
+}
+
+#[tokio::test]
+async fn serve_with_lets_loopback_through_without_a_token() {
+    // The production serve path adds gateway auth + ConnectInfo. A loopback
+    // client must still pass even when exposure + a token are configured.
+    let upstream = spawn(Router::new().route("/chat/completions", post(echo))).await;
+
+    let mut config = config_for(&upstream);
+    config.expose_to_network = true;
+    config.proxy_token = Some("super-secret".to_string());
+    let state = Arc::new(AppState::new(config));
+    state.set_models(vec![classify_model("model-a")]);
+    state.set_api_key("k");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        proxy_core::serve_with(listener, state, std::future::pending()).await.unwrap();
+    });
+    let proxy = format!("http://{addr}");
+
+    let client = reqwest::Client::new();
+    // No Authorization header at all — loopback is exempt from the token.
+    let resp = client
+        .post(format!("{proxy}/chat/completions"))
+        .json(&json!({ "model": "original", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["model"], "model-a");
+    // The upstream still receives the injected key, not the gateway token.
+    assert_eq!(v["authorization"], "Bearer k");
 }
 
 #[tokio::test]

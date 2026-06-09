@@ -51,6 +51,9 @@ pub struct AppState {
     /// Where UI preferences persist (`ui_state.json`); `None` disables saving
     /// (e.g. in tests). Set by the host app via [`AppState::load_ui_state`].
     ui_state_path: Mutex<Option<PathBuf>>,
+    /// Serializes the read-modify-write of `ui_state.json` so two concurrent
+    /// `set_visible_models` calls can't lost-update each other's changes.
+    ui_io: Mutex<()>,
     /// Shared HTTP client used to forward requests upstream.
     pub http: reqwest::Client,
 }
@@ -68,6 +71,7 @@ impl AppState {
             request_log: Mutex::new(RequestLog::default()),
             visible_models: Mutex::new(None),
             ui_state_path: Mutex::new(None),
+            ui_io: Mutex::new(()),
             http: reqwest::Client::new(),
         }
     }
@@ -169,6 +173,39 @@ impl AppState {
         self.persist_config();
     }
 
+    /// Whether the proxy may bind beyond loopback (the network-exposure opt-in).
+    pub fn expose_to_network(&self) -> bool {
+        self.config.lock().unwrap().expose_to_network
+    }
+
+    /// The gateway token non-loopback clients must present, if one is set.
+    pub fn proxy_token(&self) -> Option<String> {
+        self.config.lock().unwrap().proxy_token.clone()
+    }
+
+    /// Turns network exposure on or off. Enabling it mints a gateway token when
+    /// none exists yet (so an exposed proxy is never tokenless); disabling it
+    /// leaves the token in place so it survives a later re-enable. Persists.
+    pub fn set_expose_to_network(&self, enabled: bool) {
+        {
+            let mut cfg = self.config.lock().unwrap();
+            cfg.expose_to_network = enabled;
+            if enabled && cfg.proxy_token.is_none() {
+                cfg.proxy_token = Some(crate::settings::generate_proxy_token());
+            }
+        }
+        self.persist_config();
+    }
+
+    /// Replaces the gateway token with a freshly generated one and persists it.
+    /// Returns the new token so the UI can show it.
+    pub fn regenerate_proxy_token(&self) -> String {
+        let token = crate::settings::generate_proxy_token();
+        self.config.lock().unwrap().proxy_token = Some(token.clone());
+        self.persist_config();
+        token
+    }
+
     /// Points the app at `ui_state.json` and loads this endpoint's persisted
     /// tray-visibility selection. Call once at startup (no-op-safe to skip).
     pub fn load_ui_state(&self, path: PathBuf) {
@@ -209,11 +246,15 @@ impl AppState {
     }
 
     /// Replaces the tray-visibility selection for the current endpoint and
-    /// persists it (best-effort) to `ui_state.json`.
+    /// persists it (best-effort) to `ui_state.json`. The on-disk
+    /// read-modify-write runs under `ui_io` so concurrent calls serialize
+    /// rather than clobbering each other's entries.
     pub fn set_visible_models(&self, ids: Vec<String>) {
         *self.visible_models.lock().unwrap() = Some(ids.clone());
         let path = self.ui_state_path.lock().unwrap().clone();
         if let Some(path) = path {
+            // Hold the I/O lock across the whole load→insert→save sequence.
+            let _io = self.ui_io.lock().unwrap();
             let key = self.endpoint_key();
             let mut file = UiStateFile::load(&path);
             file.visible_models.insert(key, ids);
@@ -329,7 +370,7 @@ mod tests {
         let config = RuntimeConfig {
             listen_addr: "127.0.0.1:0".to_string(),
             endpoint_url: "https://endpoint.example/v1/chat/completions".to_string(),
-            default_model: None,
+            ..RuntimeConfig::default()
         };
         let state = AppState::new(config);
         state.set_models(models.iter().map(|m| classify_model(m)).collect());
@@ -384,5 +425,47 @@ mod tests {
         // Empty catalog → empty selection (no stale id pointing nowhere).
         state.swap_endpoint("https://third.example/v1/responses".to_string(), vec![]);
         assert_eq!(state.selected_model(), "");
+    }
+
+    #[test]
+    fn enabling_exposure_mints_a_token_once() {
+        let state = state_with(&["gpt-4o"]);
+        assert!(!state.expose_to_network());
+        assert_eq!(state.proxy_token(), None);
+
+        state.set_expose_to_network(true);
+        assert!(state.expose_to_network());
+        let token = state.proxy_token().expect("token minted on enable");
+        assert!(!token.is_empty());
+
+        // Toggling off keeps the token; toggling back on does not mint a new one.
+        state.set_expose_to_network(false);
+        assert_eq!(state.proxy_token().as_deref(), Some(token.as_str()));
+        state.set_expose_to_network(true);
+        assert_eq!(state.proxy_token().as_deref(), Some(token.as_str()));
+
+        // Explicit regeneration replaces it.
+        let fresh = state.regenerate_proxy_token();
+        assert_ne!(fresh, token);
+        assert_eq!(state.proxy_token().as_deref(), Some(fresh.as_str()));
+    }
+
+    #[test]
+    fn set_visible_models_persists_last_write() {
+        let path = std::env::temp_dir().join("copilot_proxy_state_visible_rmw_test.json");
+        let _ = std::fs::remove_file(&path);
+
+        let state = state_with(&["gpt-4o", "claude-3"]);
+        state.load_ui_state(path.clone());
+
+        state.set_visible_models(vec!["gpt-4o".into()]);
+        state.set_visible_models(vec!["claude-3".into()]);
+
+        // Reload from disk through a fresh state: the last write survived intact.
+        let reloaded = state_with(&["gpt-4o", "claude-3"]);
+        reloaded.load_ui_state(path.clone());
+        assert_eq!(reloaded.visible_model_ids(), vec!["claude-3"]);
+
+        let _ = std::fs::remove_file(&path);
     }
 }

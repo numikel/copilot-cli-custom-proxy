@@ -97,6 +97,21 @@
           <svg width="13" height="13"><use href="#i-wifi"/></svg>
           Local proxy address. Changing it restarts the proxy.
         </span>
+        <button class="cp-toggle" id="expose-toggle" title="Allow binding beyond 127.0.0.1 (requires a token)">
+          <span class="cp-toggle-box"><svg width="11" height="11"><use href="#i-check"/></svg></span>
+          expose to network
+        </button>
+      </div>
+      <div class="cp-token" id="token-row" hidden>
+        <div class="cp-field-row">
+          <input class="cp-input cp-mono" id="token-input" type="text" readonly aria-label="Gateway token" />
+          <button class="cp-iconbtn cp-btn--sm" id="copy-token-btn" title="Copy token"><svg width="13" height="13"><use href="#i-copy"/></svg></button>
+          <button class="cp-btn cp-btn--ghost cp-btn--sm" id="regen-token-btn" title="Generate a new token">regenerate</button>
+        </div>
+        <span class="cp-key-note cp-token-note">
+          <svg width="13" height="13"><use href="#i-warn"/></svg>
+          Network clients must send <code>Authorization: Bearer &lt;token&gt;</code>. Loopback (127.0.0.1) is exempt.
+        </span>
       </div>
     </div>
   </section>

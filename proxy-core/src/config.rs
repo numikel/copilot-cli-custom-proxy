@@ -122,6 +122,7 @@ impl Config {
             listen_addr: self.listen_addr,
             endpoint_url: format!("{base}{}", api.suffix()),
             default_model: self.default_model,
+            ..crate::settings::RuntimeConfig::default()
         }
     }
 }
