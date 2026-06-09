@@ -3,7 +3,11 @@ name = "copilot-proxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Local proxy for GitHub Copilot CLI with in-tray model switching"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Windows tray app that live-swaps the LLM model for GitHub Copilot CLI and Codex CLI via a local OpenAI-compatible proxy."
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

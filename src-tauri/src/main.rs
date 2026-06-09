@@ -1,5 +1,8 @@
 // On Windows in release mode hides the console — the app lives in the tray.
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod commands;
 mod startup_error;
@@ -160,7 +163,10 @@ fn resolve_config() -> (RuntimeConfig, PathBuf, bool) {
                     return (cfg, dir.clone(), needs_setup);
                 }
                 Err(e) => {
-                    tracing::warn!("ignoring unparseable config.toml at {}: {e}", toml.display())
+                    tracing::warn!(
+                        "ignoring unparseable config.toml at {}: {e}",
+                        toml.display()
+                    )
                 }
             }
         }
@@ -224,7 +230,8 @@ fn main() {
                 .map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
             std_listener.set_nonblocking(true)?;
             let listener = TcpListener::from_std(std_listener)?;
-            app.state::<ProxyTask>().spawn(listener, proxy_state.clone());
+            app.state::<ProxyTask>()
+                .spawn(listener, proxy_state.clone());
 
             tray::build_tray(app)?;
 
@@ -247,7 +254,10 @@ fn main() {
         })
         .run(tauri::generate_context!())
     {
-        show_startup_error("Copilot Proxy", &format!("Failed to start the application:\n\n{e}"));
+        show_startup_error(
+            "Copilot Proxy",
+            &format!("Failed to start the application:\n\n{e}"),
+        );
         std::process::exit(1);
     }
 }
@@ -273,8 +283,7 @@ mod tests {
             // Graceful stop must release the socket before returning.
             task.stop().await;
 
-            std::net::TcpListener::bind(addr)
-                .expect("port should be free after ProxyTask::stop()");
+            std::net::TcpListener::bind(addr).expect("port should be free after ProxyTask::stop()");
         });
     }
 }

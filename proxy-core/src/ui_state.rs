@@ -64,8 +64,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let mut file = UiStateFile::default();
-        file.visible_models
-            .insert("https://a.example/v1".into(), vec!["m1".into(), "m2".into()]);
+        file.visible_models.insert(
+            "https://a.example/v1".into(),
+            vec!["m1".into(), "m2".into()],
+        );
         file.visible_models
             .insert("https://b.example/v1".into(), vec!["x".into()]);
         file.save(&path).unwrap();
@@ -75,7 +77,14 @@ mod tests {
             loaded.visible_models.get("https://a.example/v1").unwrap(),
             &vec!["m1".to_string(), "m2".to_string()]
         );
-        assert_eq!(loaded.visible_models.get("https://b.example/v1").unwrap().len(), 1);
+        assert_eq!(
+            loaded
+                .visible_models
+                .get("https://b.example/v1")
+                .unwrap()
+                .len(),
+            1
+        );
         let _ = std::fs::remove_file(&path);
     }
 

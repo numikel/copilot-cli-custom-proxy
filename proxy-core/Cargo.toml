@@ -3,6 +3,13 @@ name = "proxy-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "GUI-independent core for copilot-cli-custom-proxy — an Axum reverse proxy that live-swaps the LLM model and injects the API key for OpenAI-compatible endpoints."
+keywords = ["proxy", "openai", "copilot", "llm", "tauri"]
+categories = ["command-line-utilities", "web-programming::http-server"]
+publish = false
 
 [dependencies]
 axum.workspace = true

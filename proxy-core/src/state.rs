@@ -233,7 +233,11 @@ impl AppState {
         let models = self.models.lock().unwrap();
         let visible = self.visible_models.lock().unwrap();
         match &*visible {
-            None => models.iter().filter(|m| m.chat).map(|m| m.id.clone()).collect(),
+            None => models
+                .iter()
+                .filter(|m| m.chat)
+                .map(|m| m.id.clone())
+                .collect(),
             Some(ids) => {
                 let allow: HashSet<&str> = ids.iter().map(String::as_str).collect();
                 models
@@ -408,7 +412,10 @@ mod tests {
             "https://other.example/v1/chat/completions".to_string(),
             vec![classify_model("claude-3"), classify_model("gpt-4o-mini")],
         );
-        assert_eq!(state.endpoint_url(), "https://other.example/v1/chat/completions");
+        assert_eq!(
+            state.endpoint_url(),
+            "https://other.example/v1/chat/completions"
+        );
         assert_eq!(state.selected_model(), "claude-3");
     }
 

@@ -101,9 +101,11 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
     // only allowed once the user has opted into exposure (which also mints the
     // gateway token).
     if !proxy_core::is_loopback_listen_addr(&addr) && !state.expose_to_network() {
-        return Err("This address is not loopback. Enable \"Expose to network\" \
+        return Err(
+            "This address is not loopback. Enable \"Expose to network\" \
                     first to bind beyond 127.0.0.1."
-            .to_string());
+                .to_string(),
+        );
     }
 
     if !listen_addr_changed(&state.listen_addr(), &addr) {

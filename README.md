@@ -1,5 +1,11 @@
 # Copilot CLI Custom Proxy
 
+[![CI](https://github.com/numikel/copilot-cli-custom-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/numikel/copilot-cli-custom-proxy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)
+![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust)
+![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri)
+
 A local HTTP proxy that lives in the system tray (Windows) for **GitHub Copilot
 CLI**. It intercepts requests, **swaps the LLM model on the fly**, and forwards
 them to a configured OpenAI-compatible endpoint — without restarting your

@@ -26,13 +26,18 @@ jobs:
             libssl-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run core tests
         run: cargo test -p proxy-core
-
-      - name: Type-check the Tauri app
-        run: cargo check -p copilot-proxy
 
   build-windows:
     name: Build Windows executable

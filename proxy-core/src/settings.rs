@@ -136,7 +136,10 @@ impl RuntimeConfig {
         match serde_json::from_str(&text) {
             Ok(cfg) => Some(cfg),
             Err(e) => {
-                tracing::warn!("config at {} is corrupt and was ignored: {e}", path.display());
+                tracing::warn!(
+                    "config at {} is corrupt and was ignored: {e}",
+                    path.display()
+                );
                 None
             }
         }
@@ -164,9 +167,11 @@ pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
     // query string) from triggering a false positive.
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.contains('@') {
-        return Err("Endpoint URL must not contain credentials (user:pass@host) — \
+        return Err(
+            "Endpoint URL must not contain credentials (user:pass@host) — \
                     enter the API key in the settings window instead"
-            .to_string());
+                .to_string(),
+        );
     }
     let stripped = trimmed.trim_end_matches('/');
     ApiKind::ALL
@@ -224,9 +229,9 @@ pub fn validate_listen_addr(addr: &str) -> Result<(), String> {
     }
 
     match port.parse::<u16>() {
-        Ok(0) | Err(_) => Err(
-            "Listen address port must be a number between 1 and 65535".to_string(),
-        ),
+        Ok(0) | Err(_) => {
+            Err("Listen address port must be a number between 1 and 65535".to_string())
+        }
         Ok(_) => Ok(()),
     }
 }
@@ -278,7 +283,10 @@ mod tests {
         let c = cfg("https://openrouter.ai/api/v1/responses");
         assert_eq!(c.active_api(), Some(ApiKind::Responses));
         assert_eq!(c.base_url().unwrap(), "https://openrouter.ai/api/v1");
-        assert_eq!(c.models_url().unwrap(), "https://openrouter.ai/api/v1/models");
+        assert_eq!(
+            c.models_url().unwrap(),
+            "https://openrouter.ai/api/v1/models"
+        );
     }
 
     #[test]

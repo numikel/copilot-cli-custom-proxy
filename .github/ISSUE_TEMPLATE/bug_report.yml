@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a problem with the proxy, tray app, or settings window
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please **do not** include your
+        API key, full endpoint URL with credentials, or any secret. For
+        security-sensitive issues, see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I switch the model from the tray, requests keep using the old model…
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce it? A minimal config (with secrets removed) helps.
+      placeholder: |
+        1. Set endpoint to https://…/v1/chat/completions
+        2. Enter API key, pick model A
+        3. Switch to model B in the tray
+        4. Observe request still uses model A
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: From the settings window / release tag (e.g. 0.3.2).
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: CLI agent
+      description: Which agent and version (e.g. GitHub Copilot CLI, Codex CLI).
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 Pro 23H2
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant console output from `cargo tauri dev` (redact secrets).
+      render: text

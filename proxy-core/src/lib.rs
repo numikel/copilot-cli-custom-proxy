@@ -72,8 +72,7 @@ fn warn_on_insecure_config(state: &AppState) {
         .rsplit_once(':')
         .map(|(h, _)| h)
         .unwrap_or(listen_addr.as_str());
-    let loopback =
-        host == "127.0.0.1" || host == "::1" || host.eq_ignore_ascii_case("localhost");
+    let loopback = host == "127.0.0.1" || host == "::1" || host.eq_ignore_ascii_case("localhost");
     if !loopback {
         tracing::warn!(
             addr = %listen_addr,

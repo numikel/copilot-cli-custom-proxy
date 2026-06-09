@@ -66,7 +66,13 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     let models_menu = Submenu::with_id(app, "models_menu", "Models", true)?;
     let ids = tray_submenu_ids(state, &selected);
     if ids.is_empty() {
-        let empty = MenuItem::with_id(app, "models_empty", "No models — Refresh first", false, None::<&str>)?;
+        let empty = MenuItem::with_id(
+            app,
+            "models_empty",
+            "No models — Refresh first",
+            false,
+            None::<&str>,
+        )?;
         models_menu.append(&empty)?;
     } else {
         for model in ids {
@@ -85,7 +91,13 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     menu.append(&models_menu)?;
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "refresh_models", "Refresh models", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "refresh_models",
+        "Refresh models",
+        true,
+        None::<&str>,
+    )?)?;
     // Only offer agents the configured upstream can actually serve.
     for &agent in crate::commands::Agent::ALL {
         if crate::commands::agent_supported(state, agent) {
@@ -98,7 +110,13 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
             )?)?;
         }
     }
-    menu.append(&MenuItem::with_id(app, "settings", "Open Settings…", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "settings",
+        "Open Settings…",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
     Ok(menu)

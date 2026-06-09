@@ -167,7 +167,10 @@ mod tests {
 
         // Single "chat" API → /chat/completions suffix.
         let chat = Config::from_str(MINIMAL).unwrap().into_runtime();
-        assert_eq!(chat.endpoint_url, "https://e.example.com/v1/chat/completions");
+        assert_eq!(
+            chat.endpoint_url,
+            "https://e.example.com/v1/chat/completions"
+        );
         assert_eq!(chat.active_api(), Some(ApiKind::Chat));
         assert_eq!(chat.listen_addr, "127.0.0.1:8080");
 

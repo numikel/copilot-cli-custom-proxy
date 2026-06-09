@@ -21,7 +21,8 @@ async fn spawn(router: Router) -> String {
 
 /// Upstream stub: echoes back what it saw (model, headers).
 async fn echo(headers: HeaderMap, body: Bytes) -> Json<serde_json::Value> {
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     Json(json!({
         "model": parsed.get("model"),
         "authorization": headers.get("authorization").and_then(|v| v.to_str().ok()),
@@ -194,7 +195,10 @@ async fn fetch_models_classifies_mixed_kinds() {
         .iter()
         .find(|m| m.id == "text-embedding-3-large")
         .unwrap();
-    assert!(!emb.chat, "text-embedding-3-large should not be a chat model");
+    assert!(
+        !emb.chat,
+        "text-embedding-3-large should not be a chat model"
+    );
     assert_eq!(emb.kind, Some(ModelKind::Embed));
 
     // whisper-1 → audio (non-chat)
@@ -322,7 +326,9 @@ async fn serve_with_lets_loopback_through_without_a_token() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        proxy_core::serve_with(listener, state, std::future::pending()).await.unwrap();
+        proxy_core::serve_with(listener, state, std::future::pending())
+            .await
+            .unwrap();
     });
     let proxy = format!("http://{addr}");
 
