@@ -1,4 +1,5 @@
 use crate::models::{classify_model, ModelInfo};
+use crate::settings::RuntimeConfig;
 use crate::state::AppState;
 use axum::{
     body::{Body, Bytes},
@@ -8,7 +9,7 @@ use axum::{
     routing::any,
     Router,
 };
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
 
 /// Maximum buffered request body size (100 MB).
@@ -40,19 +41,35 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Fetches the available models from `{corporate_base_url}/models`
-/// (OpenAI-compatible `{ "data": [ { "id": ... } ] }`), classifying each id as
-/// chat / non-chat. Requires an API key.
+/// Fetches the available models from the configured endpoint's `/models`,
+/// classifying each id. Thin wrapper over [`fetch_models_from`] that reads the
+/// live endpoint URL and key from [`AppState`].
 pub async fn fetch_models(state: &AppState) -> Result<Vec<ModelInfo>, String> {
     let api_key = state
         .api_key()
         .ok_or("API key is not set — enter it before fetching models")?;
+    fetch_models_from(&state.http, &state.endpoint_url(), &api_key).await
+}
 
-    let url = state
+/// Fetches the available models from `{base}/models` for an explicit endpoint
+/// URL, without touching [`AppState`]. This lets a caller probe a *candidate*
+/// endpoint before committing it, so the live config and model catalog can be
+/// swapped atomically afterwards (avoids a window where the new URL is paired
+/// with a stale/empty catalog). `endpoint_url` must include the API suffix.
+pub async fn fetch_models_from(
+    http: &reqwest::Client,
+    endpoint_url: &str,
+    api_key: &SecretString,
+) -> Result<Vec<ModelInfo>, String> {
+    let probe = RuntimeConfig {
+        listen_addr: String::new(),
+        endpoint_url: endpoint_url.to_string(),
+        default_model: None,
+    };
+    let url = probe
         .models_url()
         .ok_or("No endpoint configured — set the endpoint URL in the settings window first")?;
-    let resp = state
-        .http
+    let resp = http
         .get(&url)
         .header(
             header::AUTHORIZATION,

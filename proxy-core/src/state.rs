@@ -137,6 +137,31 @@ impl AppState {
         self.reload_visible_for_endpoint();
     }
 
+    /// Atomically swaps the endpoint URL **and** its model catalog in a single
+    /// critical section, keeping the current selection when it still exists in
+    /// the new catalog (otherwise the first model, or empty). This closes the
+    /// window the old `set_endpoint` + `set_models([])` sequence left open, in
+    /// which a request could read the new URL paired with an empty model.
+    ///
+    /// Lock order is `config < models < selected` (consistent with
+    /// [`AppState::set_selected_model`]); `persist_config` and
+    /// `reload_visible_for_endpoint` run *after* the `config` lock is released
+    /// because they re-acquire it (std `Mutex` is not reentrant).
+    pub fn swap_endpoint(&self, url: String, models: Vec<ModelInfo>) {
+        {
+            let mut config = self.config.lock().unwrap();
+            let mut models_guard = self.models.lock().unwrap();
+            let mut selected = self.selected_model.lock().unwrap();
+            config.endpoint_url = url;
+            if !models.iter().any(|m| m.id == *selected) {
+                *selected = models.first().map(|m| m.id.clone()).unwrap_or_default();
+            }
+            *models_guard = models;
+        }
+        self.persist_config();
+        self.reload_visible_for_endpoint();
+    }
+
     /// Replaces the listen address and persists it. The caller is responsible
     /// for restarting the proxy task so the new address takes effect.
     pub fn set_listen_addr(&self, addr: String) {
@@ -331,5 +356,33 @@ mod tests {
         let state = state_with(&["gpt-4o", "claude-3"]);
         state.set_visible_models(vec![]);
         assert!(state.visible_model_ids().is_empty());
+    }
+
+    #[test]
+    fn swap_endpoint_keeps_selection_when_model_survives() {
+        let state = state_with(&["gpt-4o", "claude-3"]);
+        assert!(state.set_selected_model("claude-3"));
+        // New catalog still contains claude-3 → selection preserved.
+        state.swap_endpoint(
+            "https://other.example/v1/chat/completions".to_string(),
+            vec![classify_model("claude-3"), classify_model("gpt-4o-mini")],
+        );
+        assert_eq!(state.endpoint_url(), "https://other.example/v1/chat/completions");
+        assert_eq!(state.selected_model(), "claude-3");
+    }
+
+    #[test]
+    fn swap_endpoint_resets_selected_when_model_absent() {
+        let state = state_with(&["gpt-4o", "claude-3"]);
+        assert!(state.set_selected_model("claude-3"));
+        // claude-3 is gone → fall back to the first model in the new catalog.
+        state.swap_endpoint(
+            "https://other.example/v1/chat/completions".to_string(),
+            vec![classify_model("llama-3"), classify_model("mistral")],
+        );
+        assert_eq!(state.selected_model(), "llama-3");
+        // Empty catalog → empty selection (no stale id pointing nowhere).
+        state.swap_endpoint("https://third.example/v1/responses".to_string(), vec![]);
+        assert_eq!(state.selected_model(), "");
     }
 }

@@ -43,40 +43,77 @@ pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
     state_view(&state)
 }
 
-/// Sets the upstream endpoint URL (must end in /chat/completions or /responses),
-/// persists it, clears the now-stale model catalog, and — if a key is set —
-/// refetches models from the new endpoint. Rebuilds the tray.
+/// Sets the upstream endpoint URL (must end in /chat/completions or /responses)
+/// and refreshes the model catalog. To avoid a window where the new URL is
+/// paired with a stale/empty catalog (which would forward `"model": ""`), the
+/// new endpoint's models are fetched *before* mutating shared state, then the
+/// URL and catalog are swapped atomically. On a fetch error the new URL is
+/// still committed with an empty catalog (the user picked it deliberately;
+/// Refresh recovers once the network is back). Rebuilds the tray.
 #[tauri::command]
 pub async fn set_endpoint(app: AppHandle, url: String) -> Result<StateView, String> {
     let url = url.trim().to_string();
     proxy_core::validate_endpoint_url(&url)?;
 
     let state = app.state::<Arc<AppState>>().inner().clone();
-    state.set_endpoint(url);
-    // The catalog belongs to the previous endpoint — drop it.
-    state.set_models(Vec::new());
-    if state.has_api_key() {
-        match proxy_core::fetch_models(&state).await {
-            Ok(models) => state.set_models(models),
-            Err(e) => tracing::warn!("model refresh after endpoint change failed: {e}"),
+
+    // Probe the candidate endpoint without touching live state.
+    let models = if let Some(key) = state.api_key() {
+        match proxy_core::fetch_models_from(&state.http, &url, &key).await {
+            Ok(models) => models,
+            Err(e) => {
+                tracing::warn!("model refresh for new endpoint failed: {e}");
+                Vec::new()
+            }
         }
-    }
+    } else {
+        Vec::new()
+    };
+
+    state.swap_endpoint(url, models);
     let _ = crate::tray::apply_menu(&app);
     Ok(state_view(&state))
 }
 
-/// Sets the local listen address (validated as host:port), persists it, and
-/// restarts the background proxy task so the new address takes effect.
+/// Sets the local listen address (validated as host:port) and restarts the
+/// background proxy on the new address. The restart is robust:
+/// - a no-op when the address is unchanged (avoids tearing down a working
+///   server and a spurious "address in use" against itself);
+/// - the new address is **bound eagerly** here, so a bind failure (e.g. port in
+///   use) surfaces as an `Err` to the UI while the old server keeps running;
+/// - only after a successful bind is the old server gracefully stopped (its
+///   port released) and the new one spawned on the already-bound listener.
 #[tauri::command]
-pub fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, String> {
+pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, String> {
     let addr = addr.trim().to_string();
     proxy_core::validate_listen_addr(&addr)?;
 
     let state = app.state::<Arc<AppState>>().inner().clone();
+
+    if !listen_addr_changed(&state.listen_addr(), &addr) {
+        return Ok(state_view(&state));
+    }
+
+    // Bind the new address before touching the running server. A different
+    // address never collides with the old one; a failure here leaves the old
+    // server intact (safe rollback) and is reported to the UI.
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
+
     state.set_listen_addr(addr);
-    crate::restart_proxy(&app, state.clone());
+    let task = app.state::<crate::ProxyTask>();
+    task.stop().await;
+    task.spawn(listener, state.clone());
+
     let _ = crate::tray::apply_menu(&app);
     Ok(state_view(&state))
+}
+
+/// Whether a candidate listen address differs from the current one (trimmed
+/// comparison). Pulled out so the skip-if-unchanged decision is unit-testable.
+pub(crate) fn listen_addr_changed(current: &str, candidate: &str) -> bool {
+    current.trim() != candidate.trim()
 }
 
 /// Sets which models appear in the tray's "Models" submenu (curated in the
@@ -251,7 +288,7 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<()> {
             // The env_key must point at a set variable; the value is a dummy
             // because the proxy injects the real key from memory.
             command
-                .args(["-NoExit", "-Command", &codex_command(base_url)])
+                .args(["-NoExit", "-Command", &codex_command(base_url)?])
                 .env(CODEX_KEY_ENV, "proxy-managed");
         }
     }
@@ -261,18 +298,29 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<()> {
 }
 
 /// Builds the `codex` invocation that points an ephemeral provider at the proxy.
-/// Values contain no spaces, so no shell quoting is required.
+/// `base_url` is wrapped in a PowerShell single-quoted string so that shell
+/// metacharacters (`;`, `&`, `|`, `$`, backtick) inside it are treated as
+/// literal text rather than executed — defence-in-depth on top of the strict
+/// `validate_listen_addr` host whitelist. A single quote in `base_url` would
+/// break out of that quoting, so it is rejected outright (it can never be a
+/// valid URL anyway).
 #[cfg(target_os = "windows")]
-fn codex_command(base_url: &str) -> String {
-    format!(
+fn codex_command(base_url: &str) -> std::io::Result<String> {
+    if base_url.contains('\'') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "proxy base URL must not contain a single quote",
+        ));
+    }
+    Ok(format!(
         "codex \
          -c model_provider=proxy \
          -c model_providers.proxy.name=copilot-proxy \
-         -c model_providers.proxy.base_url={base_url} \
+         -c 'model_providers.proxy.base_url={base_url}' \
          -c model_providers.proxy.wire_api=responses \
          -c model_providers.proxy.env_key={CODEX_KEY_ENV} \
          -c model={PROXY_MODEL_LABEL}"
-    )
+    ))
 }
 
 /// Environment variable Codex reads the (dummy) API key from.
@@ -328,5 +376,28 @@ mod tests {
         assert!(proxy_core::validate_endpoint_url("https://e.example/v1/responses").is_ok());
         assert!(proxy_core::validate_listen_addr("127.0.0.1:8080").is_ok());
         assert!(proxy_core::validate_listen_addr("nope").is_err());
+    }
+
+    #[test]
+    fn listen_addr_changed_compares_trimmed() {
+        assert!(!listen_addr_changed("127.0.0.1:8080", "127.0.0.1:8080"));
+        assert!(!listen_addr_changed("127.0.0.1:8080", "  127.0.0.1:8080  "));
+        assert!(listen_addr_changed("127.0.0.1:8080", "127.0.0.1:9090"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn codex_command_single_quotes_base_url() {
+        // The base URL must be wrapped in single quotes so shell metacharacters
+        // inside it cannot execute.
+        let cmd = codex_command("http://127.0.0.1:8080").unwrap();
+        assert!(cmd.contains("-c 'model_providers.proxy.base_url=http://127.0.0.1:8080'"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn codex_command_rejects_single_quote() {
+        // A quote would break out of the quoting — reject it outright.
+        assert!(codex_command("http://127.0.0.1:8080'whoami").is_err());
     }
 }

@@ -125,8 +125,18 @@ impl RuntimeConfig {
 /// API suffix so the wire API can be derived. Returns the detected API.
 pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
     let trimmed = url.trim();
-    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
-        return Err("Endpoint URL must start with http:// or https://".to_string());
+    let rest = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .ok_or("Endpoint URL must start with http:// or https://")?;
+    // Reject credentials embedded in the authority (`user:pass@host`). Splitting
+    // on the first path/query/fragment delimiter keeps any later `@` (e.g. in a
+    // query string) from triggering a false positive.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("Endpoint URL must not contain credentials (user:pass@host) — \
+                    enter the API key in the settings window instead"
+            .to_string());
     }
     let stripped = trimmed.trim_end_matches('/');
     ApiKind::ALL
@@ -141,18 +151,54 @@ pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
 }
 
 /// Validates a `host:port` listen address. Hostnames are allowed (so plain
-/// `SocketAddr` parsing is too strict); only the port is parsed strictly.
+/// `SocketAddr` parsing is too strict), but the host is restricted to a strict
+/// character whitelist so the value is safe to interpolate into a launched
+/// CLI's command line (the address becomes the proxy's `base_url`). Bracketed
+/// IPv6 literals (`[::1]:8080`) are supported. The port must be 1–65535.
 pub fn validate_listen_addr(addr: &str) -> Result<(), String> {
     let addr = addr.trim();
-    let (host, port) = addr
-        .rsplit_once(':')
-        .ok_or("Listen address must be in host:port form (e.g. 127.0.0.1:8080)")?;
+
+    // Split host from port, handling bracketed IPv6 literals separately so the
+    // colons inside the address are not mistaken for the port separator.
+    let (host, port, is_ipv6) = if let Some(after_bracket) = addr.strip_prefix('[') {
+        let (host, rest) = after_bracket
+            .split_once(']')
+            .ok_or("IPv6 listen address must be enclosed in brackets (e.g. [::1]:8080)")?;
+        let port = rest
+            .strip_prefix(':')
+            .ok_or("Listen address must be in host:port form (e.g. [::1]:8080)")?;
+        (host, port, true)
+    } else {
+        let (host, port) = addr
+            .rsplit_once(':')
+            .ok_or("Listen address must be in host:port form (e.g. 127.0.0.1:8080)")?;
+        (host, port, false)
+    };
+
     if host.is_empty() {
         return Err("Listen address host must not be empty".to_string());
     }
-    port.parse::<u16>()
-        .map_err(|_| "Listen address port must be a number between 1 and 65535".to_string())?;
-    Ok(())
+
+    let host_ok = if is_ipv6 {
+        host.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
+    } else {
+        // RFC 1123 host characters only. This rejects shell metacharacters
+        // (`;`, backtick, `$`, `|`, `&`, quotes, whitespace, ...) outright.
+        host.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    };
+    if !host_ok {
+        return Err("Listen address host contains invalid characters \
+                    (only letters, digits, '-' and '.' are allowed)"
+            .to_string());
+    }
+
+    match port.parse::<u16>() {
+        Ok(0) | Err(_) => Err(
+            "Listen address port must be a number between 1 and 65535".to_string(),
+        ),
+        Ok(_) => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -224,12 +270,53 @@ mod tests {
     }
 
     #[test]
+    fn validate_endpoint_rejects_userinfo() {
+        // Credentials in the authority must be rejected (they would leak into
+        // logs and config.json).
+        assert!(validate_endpoint_url("https://user:pass@evil.com/v1/responses").is_err());
+        assert!(validate_endpoint_url("https://user@evil.com/v1/responses").is_err());
+        // A normal credential-free URL still validates.
+        assert!(validate_endpoint_url("https://e.example.com/v1/responses").is_ok());
+        // The authority split means an `@` is only flagged in the authority, not
+        // later in the URL — the rejection above is specifically the userinfo
+        // guard (not the suffix check, which would also fail on a stray query).
+        let err = validate_endpoint_url("https://user:pass@evil.com/v1/responses").unwrap_err();
+        assert!(err.contains("credentials"));
+    }
+
+    #[test]
     fn validate_listen_addr_checks_port() {
         assert!(validate_listen_addr("127.0.0.1:8080").is_ok());
         assert!(validate_listen_addr("localhost:65535").is_ok());
         assert!(validate_listen_addr("127.0.0.1").is_err());
         assert!(validate_listen_addr("127.0.0.1:notaport").is_err());
         assert!(validate_listen_addr(":8080").is_err());
+        // Port 0 would let the OS pick a random port — reject it.
+        assert!(validate_listen_addr("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn validate_listen_addr_accepts_ipv6_and_hostnames() {
+        assert!(validate_listen_addr("[::1]:8080").is_ok());
+        assert!(validate_listen_addr("[2001:db8::1]:443").is_ok());
+        assert!(validate_listen_addr("example-host.local:80").is_ok());
+        // Brackets without a port, or a non-hex IPv6 body, are rejected.
+        assert!(validate_listen_addr("[::1]").is_err());
+        assert!(validate_listen_addr("[gggg::1]:80").is_err());
+    }
+
+    #[test]
+    fn validate_listen_addr_rejects_shell_metachars() {
+        // The host feeds the launched CLI's command line — reject anything that
+        // could break out of it (this is the SEC-001 regression guard).
+        assert!(validate_listen_addr("127.0.0.1;calc:8080").is_err());
+        assert!(validate_listen_addr("127.0.0.1`whoami`:8080").is_err());
+        assert!(validate_listen_addr("$(rm -rf /):8080").is_err());
+        assert!(validate_listen_addr("a b:8080").is_err());
+        assert!(validate_listen_addr("a|b:8080").is_err());
+        assert!(validate_listen_addr("a&b:8080").is_err());
+        assert!(validate_listen_addr("a'b:8080").is_err());
+        assert!(validate_listen_addr("a\"b:8080").is_err());
     }
 
     #[test]

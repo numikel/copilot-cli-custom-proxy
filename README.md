@@ -53,8 +53,11 @@ In the **Endpoint** section you set:
 - **Chat completions ⟷ Responses switch** — one API is active at a time. Flipping
   the switch rewrites the URL suffix; the active API decides which CLI agent you
   can launch (Copilot for chat, Codex for responses).
-- **Listen address** — the local `host:port` the proxy binds. Changing it
-  restarts only the background proxy task (no app/terminal restart).
+- **Listen address** — the local `host:port` the proxy binds (the host is
+  restricted to a strict character set). Changing it restarts only the background
+  proxy task (no app/terminal restart): the new address is bound first, so if the
+  port is already in use the error is shown in the window and the running proxy is
+  left intact. Re-confirming the same address does nothing.
 
 The **model list is fetched automatically** from `{endpoint base}/models` (the
 endpoint URL minus the API suffix) once you enter your API key, and via the
@@ -226,6 +229,11 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
   let anything on the network use your key. The app logs a warning if you do.
 - Use an `https://` endpoint — a non-HTTPS endpoint URL sends the key
   unencrypted (the app warns about this too).
+- Don't embed credentials in the endpoint URL (`https://user:pass@host/…`) — such
+  URLs are rejected so a key can't leak into `config.json` or the logs.
+- The listen address and endpoint URL are validated both when entered and when
+  `config.json` is loaded at startup; an invalid hand-edited value falls back to a
+  safe default instead of being trusted.
 - The settings window loads only local, static assets under a restrictive CSP.
 
 ## Notes
