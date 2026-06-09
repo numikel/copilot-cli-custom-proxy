@@ -133,7 +133,10 @@ mod tests {
         let path = std::env::temp_dir().join("copilot_proxy_uistate_legacy_test.json");
         std::fs::write(&path, r#"{"visible_models":{"https://a/v1":["m1"]}}"#).unwrap();
         let loaded = UiStateFile::load(&path);
-        assert_eq!(loaded.visible_models.get("https://a/v1").unwrap(), &vec!["m1".to_string()]);
+        assert_eq!(
+            loaded.visible_models.get("https://a/v1").unwrap(),
+            &vec!["m1".to_string()]
+        );
         assert!(loaded.selected_models.is_empty());
         let _ = std::fs::remove_file(&path);
     }

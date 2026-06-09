@@ -125,8 +125,8 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
     // server intact (safe rollback) and is reported to the UI. The std socket is
     // handed to `ProxyTask::spawn`, which registers it with the reactor inside
     // the runtime.
-    let listener =
-        std::net::TcpListener::bind(&addr).map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
+    let listener = std::net::TcpListener::bind(&addr)
+        .map_err(|e| format!("cannot bind proxy to {addr}: {e}"))?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot configure proxy socket {addr}: {e}"))?;

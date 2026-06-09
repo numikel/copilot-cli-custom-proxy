@@ -551,7 +551,12 @@ mod tests {
 
         let state = chat_state(endpoint);
         state.load_ui_state(path.clone());
-        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        state.set_models(
+            ["gpt-4o", "claude-3"]
+                .iter()
+                .map(|m| classify_model(m))
+                .collect(),
+        );
         // Picking a non-default model persists it.
         assert!(state.set_selected_model("claude-3"));
 
@@ -561,7 +566,12 @@ mod tests {
         let reloaded = chat_state(endpoint);
         reloaded.load_ui_state(path.clone());
         assert_eq!(reloaded.selected_model(), "");
-        reloaded.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        reloaded.set_models(
+            ["gpt-4o", "claude-3"]
+                .iter()
+                .map(|m| classify_model(m))
+                .collect(),
+        );
         assert_eq!(reloaded.selected_model(), "claude-3");
 
         let _ = std::fs::remove_file(&path);
@@ -575,7 +585,12 @@ mod tests {
 
         let state = chat_state(endpoint_a);
         state.load_ui_state(path.clone());
-        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        state.set_models(
+            ["gpt-4o", "claude-3"]
+                .iter()
+                .map(|m| classify_model(m))
+                .collect(),
+        );
         assert!(state.set_selected_model("claude-3")); // persisted for endpoint A
 
         // Switch to endpoint B and persist a choice there.
@@ -603,7 +618,12 @@ mod tests {
 
         let state = chat_state(endpoint);
         state.load_ui_state(path.clone());
-        state.set_models(["gpt-4o", "claude-3"].iter().map(|m| classify_model(m)).collect());
+        state.set_models(
+            ["gpt-4o", "claude-3"]
+                .iter()
+                .map(|m| classify_model(m))
+                .collect(),
+        );
         assert!(state.set_selected_model("claude-3"));
 
         // A new catalog without claude-3: the persisted id is gone → first model.
