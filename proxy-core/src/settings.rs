@@ -59,6 +59,18 @@ pub struct RuntimeConfig {
     /// otherwise.
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Opt-in to binding the proxy beyond loopback. Off by default: the proxy
+    /// injects the API key into every request, so a non-loopback bind would
+    /// share that key with the whole network. When off, a non-loopback
+    /// `listen_addr` is rejected / reset to loopback.
+    #[serde(default)]
+    pub expose_to_network: bool,
+    /// Gateway access token required from non-loopback clients once
+    /// [`Self::expose_to_network`] is on. Distinct from the upstream API key
+    /// (which stays in memory only) — this is a low-sensitivity, self-generated
+    /// credential, persisted so a remote device need not re-pair every restart.
+    #[serde(default)]
+    pub proxy_token: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -71,6 +83,8 @@ impl Default for RuntimeConfig {
             listen_addr: DEFAULT_LISTEN_ADDR.to_string(),
             endpoint_url: String::new(),
             default_model: None,
+            expose_to_network: false,
+            proxy_token: None,
         }
     }
 }
@@ -107,17 +121,33 @@ impl RuntimeConfig {
     }
 
     /// Reads `config.json`, returning `None` if it is missing or unreadable so
-    /// the caller can fall back to a seed / defaults.
+    /// the caller can fall back to a seed / defaults. A *corrupt* file (present
+    /// but not valid JSON) is logged at `warn` so a lost configuration is
+    /// diagnosable — a missing file stays silent (the normal first-run case).
     pub fn load(path: &Path) -> Option<Self> {
-        let text = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&text).ok()
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                tracing::warn!("could not read config at {}: {e}", path.display());
+                return None;
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                tracing::warn!("config at {} is corrupt and was ignored: {e}", path.display());
+                None
+            }
+        }
     }
 
-    /// Writes the config to disk (pretty-printed for easy hand-editing).
+    /// Writes the config to disk (pretty-printed for easy hand-editing), via an
+    /// atomic temp-write + rename so a crash mid-write can't truncate it.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, text)
+        crate::atomic_io::write_atomic(path, text.as_bytes())
     }
 }
 
@@ -201,15 +231,45 @@ pub fn validate_listen_addr(addr: &str) -> Result<(), String> {
     }
 }
 
+/// Extracts the host portion of a `host:port` listen address, handling
+/// bracketed IPv6 literals (`[::1]:8080` → `::1`).
+fn listen_host(addr: &str) -> Option<&str> {
+    let addr = addr.trim();
+    if let Some(after_bracket) = addr.strip_prefix('[') {
+        after_bracket.split_once(']').map(|(host, _)| host)
+    } else {
+        addr.rsplit_once(':').map(|(host, _)| host)
+    }
+}
+
+/// Whether a `host:port` listen address binds to loopback only (reachable from
+/// the local machine, not the network). Covers the whole `127.0.0.0/8` range,
+/// `::1`, and `localhost`. A non-loopback bind shares the injected API key with
+/// anything that can reach the port, so it is gated behind an explicit opt-in.
+pub fn is_loopback_listen_addr(addr: &str) -> bool {
+    match listen_host(addr) {
+        Some(host) => match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => ip.is_loopback(),
+            Err(_) => host.eq_ignore_ascii_case("localhost"),
+        },
+        None => false,
+    }
+}
+
+/// Generates a fresh gateway token (a random 32-char hex string). Used to
+/// protect the proxy when it is exposed beyond loopback.
+pub fn generate_proxy_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn cfg(url: &str) -> RuntimeConfig {
         RuntimeConfig {
-            listen_addr: DEFAULT_LISTEN_ADDR.to_string(),
             endpoint_url: url.to_string(),
-            default_model: None,
+            ..RuntimeConfig::default()
         }
     }
 
@@ -336,5 +396,50 @@ mod tests {
         let missing = std::env::temp_dir().join("copilot_proxy_config_absent_zzz.json");
         let _ = std::fs::remove_file(&missing);
         assert!(RuntimeConfig::load(&missing).is_none());
+    }
+
+    #[test]
+    fn corrupt_config_json_loads_none() {
+        // A present-but-unparseable file is ignored (and logged) rather than
+        // crashing — the caller falls back to a seed / defaults.
+        let path = std::env::temp_dir().join("copilot_proxy_config_corrupt_test.json");
+        std::fs::write(&path, b"{ this is not valid json").unwrap();
+        assert!(RuntimeConfig::load(&path).is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn config_roundtrips_new_fields() {
+        let path = std::env::temp_dir().join("copilot_proxy_config_newfields_test.json");
+        let _ = std::fs::remove_file(&path);
+        let c = RuntimeConfig {
+            expose_to_network: true,
+            proxy_token: Some("abc123".to_string()),
+            ..cfg("https://e.example.com/v1/responses")
+        };
+        c.save(&path).unwrap();
+        let loaded = RuntimeConfig::load(&path).unwrap();
+        assert!(loaded.expose_to_network);
+        assert_eq!(loaded.proxy_token.as_deref(), Some("abc123"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn loopback_detection() {
+        assert!(is_loopback_listen_addr("127.0.0.1:8080"));
+        assert!(is_loopback_listen_addr("127.0.0.5:80"));
+        assert!(is_loopback_listen_addr("localhost:8080"));
+        assert!(is_loopback_listen_addr("[::1]:8080"));
+        assert!(!is_loopback_listen_addr("0.0.0.0:8080"));
+        assert!(!is_loopback_listen_addr("192.168.1.10:8080"));
+        assert!(!is_loopback_listen_addr("example.com:443"));
+    }
+
+    #[test]
+    fn generated_token_is_nonempty_and_unique() {
+        let a = generate_proxy_token();
+        let b = generate_proxy_token();
+        assert!(!a.is_empty());
+        assert_ne!(a, b);
     }
 }

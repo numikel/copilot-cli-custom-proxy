@@ -20,6 +20,11 @@ pub struct StateView {
     /// Model ids shown in the tray's "Models" submenu for this endpoint
     /// (curated in the settings window; defaults to all chat models).
     pub visible_models: Vec<String>,
+    /// Whether the proxy is allowed to bind beyond loopback (network exposure).
+    pub expose_to_network: bool,
+    /// Gateway token non-loopback clients must present (shown so the user can
+    /// copy it to a remote device). `None`/absent until exposure is enabled.
+    pub proxy_token: Option<String>,
     /// Live snapshot of forwarded traffic, so the UI can show what Copilot hits.
     pub request_log: RequestLog,
 }
@@ -34,6 +39,8 @@ fn state_view(state: &AppState) -> StateView {
         endpoint_url: state.endpoint_url(),
         active_api: state.active_api().map(|a| a.as_str().to_string()),
         visible_models: state.visible_model_ids(),
+        expose_to_network: state.expose_to_network(),
+        proxy_token: state.proxy_token(),
         request_log: state.request_log(),
     }
 }
@@ -90,6 +97,15 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
 
     let state = app.state::<Arc<AppState>>().inner().clone();
 
+    // A non-loopback bind shares the injected API key with the network, so it is
+    // only allowed once the user has opted into exposure (which also mints the
+    // gateway token).
+    if !proxy_core::is_loopback_listen_addr(&addr) && !state.expose_to_network() {
+        return Err("This address is not loopback. Enable \"Expose to network\" \
+                    first to bind beyond 127.0.0.1."
+            .to_string());
+    }
+
     if !listen_addr_changed(&state.listen_addr(), &addr) {
         return Ok(state_view(&state));
     }
@@ -124,6 +140,27 @@ pub fn set_visible_models(app: AppHandle, models: Vec<String>) -> Result<(), Str
     state.set_visible_models(models);
     let _ = crate::tray::apply_menu(&app);
     Ok(())
+}
+
+/// Toggles whether the proxy may bind beyond loopback. Enabling it mints a
+/// gateway token (if none exists) so an exposed proxy is never tokenless;
+/// disabling it does **not** move an already-bound non-loopback address back to
+/// loopback (the user changes the address explicitly afterwards). Rebuilds tray.
+#[tauri::command]
+pub fn set_expose_to_network(app: AppHandle, enabled: bool) -> Result<StateView, String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    state.set_expose_to_network(enabled);
+    let _ = crate::tray::apply_menu(&app);
+    Ok(state_view(&state))
+}
+
+/// Replaces the gateway token with a freshly generated one (so a leaked token
+/// can be rotated). Returns the updated state including the new token.
+#[tauri::command]
+pub fn regenerate_proxy_token(app: AppHandle) -> Result<StateView, String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    state.regenerate_proxy_token();
+    Ok(state_view(&state))
 }
 
 #[tauri::command]
@@ -259,8 +296,34 @@ pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), S
 /// Opens a new terminal with the proxy environment set and starts the selected
 /// agent pointed at the proxy. Shared by the tray menu and the settings window.
 pub fn launch_agent(state: &AppState, kind: Agent) -> Result<(), String> {
-    let base_url = format!("http://{}", state.listen_addr());
+    let base_url = local_base_url(&state.listen_addr());
     spawn_agent(kind, &base_url).map_err(|e| e.to_string())
+}
+
+/// The base URL a *local* agent should use to reach the proxy. When the proxy
+/// binds beyond loopback (or to a wildcard like `0.0.0.0`, which is not a
+/// connectable destination), the local agent still connects via `127.0.0.1` —
+/// that keeps it a loopback peer, so it never needs the gateway token.
+pub(crate) fn local_base_url(listen_addr: &str) -> String {
+    let addr = listen_addr.trim();
+    if proxy_core::is_loopback_listen_addr(addr) {
+        return format!("http://{addr}");
+    }
+    let port = listen_port(addr).unwrap_or("8080");
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Extracts the port from a `host:port` listen address (handling bracketed
+/// IPv6 literals like `[::]:8080`).
+fn listen_port(addr: &str) -> Option<&str> {
+    let addr = addr.trim();
+    if let Some(after_bracket) = addr.strip_prefix('[') {
+        after_bracket
+            .split_once(']')
+            .and_then(|(_, rest)| rest.strip_prefix(':'))
+    } else {
+        addr.rsplit_once(':').map(|(_, port)| port)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -345,6 +408,7 @@ mod tests {
             listen_addr: "127.0.0.1:0".to_string(),
             endpoint_url: url.to_string(),
             default_model: None,
+            ..RuntimeConfig::default()
         })
     }
 
@@ -383,6 +447,17 @@ mod tests {
         assert!(!listen_addr_changed("127.0.0.1:8080", "127.0.0.1:8080"));
         assert!(!listen_addr_changed("127.0.0.1:8080", "  127.0.0.1:8080  "));
         assert!(listen_addr_changed("127.0.0.1:8080", "127.0.0.1:9090"));
+    }
+
+    #[test]
+    fn local_base_url_keeps_loopback_and_rewrites_wildcard() {
+        // Loopback addresses are used verbatim.
+        assert_eq!(local_base_url("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(local_base_url("localhost:9000"), "http://localhost:9000");
+        // Wildcard / non-loopback binds are reached locally via 127.0.0.1.
+        assert_eq!(local_base_url("0.0.0.0:8080"), "http://127.0.0.1:8080");
+        assert_eq!(local_base_url("192.168.1.10:1234"), "http://127.0.0.1:1234");
+        assert_eq!(local_base_url("[::]:7000"), "http://127.0.0.1:7000");
     }
 
     #[cfg(target_os = "windows")]

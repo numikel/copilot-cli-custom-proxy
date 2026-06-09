@@ -44,9 +44,10 @@ impl ModelKind {
 
 /// Infers a model's classification from its id.
 ///
-/// Heuristic, case-insensitive substring match against the id. Anything that
-/// doesn't look like a known non-chat family is treated as a chat model
-/// (`chat: true`, `kind: None`) — the common case.
+/// Heuristic, case-insensitive match against the id's *word tokens* (split on
+/// `-`, `_`, `.`, `/`, `:`, space). Anything that doesn't look like a known
+/// non-chat family is treated as a chat model (`chat: true`, `kind: None`) —
+/// the common case.
 pub fn classify_model(id: &str) -> ModelInfo {
     let lower = id.to_ascii_lowercase();
     let kind = infer_kind(&lower);
@@ -57,35 +58,48 @@ pub fn classify_model(id: &str) -> ModelInfo {
     }
 }
 
+/// Whether any word token of `lower` matches `marker` — equal to it, or
+/// starting with it (so `embedding` matches `embed`, `reranker` matches
+/// `rerank`). Matching on token boundaries instead of raw substrings stops
+/// false hits like `watts` for `tts` or `vanguard` for `guard`, which would
+/// otherwise hide perfectly good chat models from the tray.
+fn has_marker(lower: &str, marker: &str) -> bool {
+    lower
+        .split(['-', '_', '.', '/', ':', ' '])
+        .any(|token| token == marker || token.starts_with(marker))
+}
+
 /// Returns the non-chat family for a lowercased id, or `None` for chat models.
 /// Order matters: more specific markers are checked before broader ones.
 fn infer_kind(lower: &str) -> Option<ModelKind> {
     // Reranking (e.g. "rerank-english-v3", "bge-reranker").
-    if lower.contains("rerank") {
+    if has_marker(lower, "rerank") {
         return Some(ModelKind::Rerank);
     }
     // Content moderation / safety classifiers (e.g. "omni-moderation", "llama-guard").
-    if lower.contains("moderation") || lower.contains("guard") {
+    if has_marker(lower, "moderation") || has_marker(lower, "guard") {
         return Some(ModelKind::Moderation);
     }
     // Text embeddings (e.g. "text-embedding-3-large", "bge-embedding").
-    if lower.contains("embed") {
+    if has_marker(lower, "embed") {
         return Some(ModelKind::Embed);
     }
     // Speech/audio (e.g. "whisper-1", "tts-1", "gpt-4o-transcribe").
-    if lower.contains("whisper")
-        || lower.contains("tts")
-        || lower.contains("audio")
-        || lower.contains("speech")
-        || lower.contains("transcribe")
+    if has_marker(lower, "whisper")
+        || has_marker(lower, "tts")
+        || has_marker(lower, "audio")
+        || has_marker(lower, "speech")
+        || has_marker(lower, "transcribe")
     {
         return Some(ModelKind::Audio);
     }
     // Image generation (e.g. "dall-e-3", "gpt-image-1", "stable-diffusion").
+    // `dall-e` straddles the token split, so it is matched as a raw substring;
+    // the rest go through the token matcher.
     if lower.contains("dall-e")
-        || lower.contains("dalle")
-        || lower.contains("image")
-        || lower.contains("diffusion")
+        || has_marker(lower, "dalle")
+        || has_marker(lower, "image")
+        || has_marker(lower, "diffusion")
     {
         return Some(ModelKind::Image);
     }
@@ -139,6 +153,21 @@ mod tests {
             assert!(m.chat, "{id} should be a chat model");
             assert_eq!(m.kind, None);
         }
+    }
+
+    #[test]
+    fn token_boundaries_dont_swallow_chat_models() {
+        // Regression: a raw substring scan misread these as non-chat and hid
+        // them from the tray. "watts" contains "tts", "vanguard" contains
+        // "guard" — but neither is a token match.
+        for id in ["watts-3b", "vanguard-instruct", "seaguard"] {
+            let m = classify_model(id);
+            assert!(m.chat, "{id} should be a chat model");
+            assert_eq!(m.kind, None, "{id} should have no non-chat kind");
+        }
+        // ...while the genuine short-marker models still classify correctly.
+        assert_eq!(kind_of("tts-1"), Some(ModelKind::Audio));
+        assert_eq!(kind_of("llama-guard-3-8b"), Some(ModelKind::Moderation));
     }
 
     #[test]

@@ -91,6 +91,22 @@ fn sanitize_config(mut cfg: RuntimeConfig) -> RuntimeConfig {
         );
         cfg.listen_addr = proxy_core::DEFAULT_LISTEN_ADDR.to_string();
     }
+    // A non-loopback bind must never come up without the explicit exposure
+    // opt-in (which gates the gateway token) — a hand-edited config that sets a
+    // LAN address but not the flag is reset to loopback.
+    if !proxy_core::is_loopback_listen_addr(&cfg.listen_addr) && !cfg.expose_to_network {
+        tracing::warn!(
+            addr = %cfg.listen_addr,
+            "non-loopback listen_addr without expose_to_network — falling back to {}",
+            proxy_core::DEFAULT_LISTEN_ADDR
+        );
+        cfg.listen_addr = proxy_core::DEFAULT_LISTEN_ADDR.to_string();
+    }
+    // An exposed proxy is never tokenless: mint one if the config enabled
+    // exposure but carries no token (e.g. hand-edited).
+    if cfg.expose_to_network && cfg.proxy_token.as_deref().unwrap_or("").is_empty() {
+        cfg.proxy_token = Some(proxy_core::generate_proxy_token());
+    }
     if !cfg.endpoint_url.is_empty() {
         if let Err(e) = proxy_core::validate_endpoint_url(&cfg.endpoint_url) {
             tracing::warn!(
@@ -195,7 +211,9 @@ fn main() {
             commands::refresh_models,
             commands::set_visible_models,
             commands::set_endpoint,
-            commands::set_listen_addr
+            commands::set_listen_addr,
+            commands::set_expose_to_network,
+            commands::regenerate_proxy_token
         ])
         .setup(move |app| {
             // Bind the listener synchronously (no async runtime needed yet) so a

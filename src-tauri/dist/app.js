@@ -13,6 +13,8 @@ const ui = {
   models: [], // [{id, chat, kind}]
   selected: "",
   listenAddr: "",
+  exposeToNetwork: false, // allow binding beyond loopback (gated by a token)
+  proxyToken: null, // gateway token shown when exposure is on
   endpoint: "", // full upstream URL, including the API suffix
   activeApi: null, // "chat" | "responses" | null (derived from the endpoint URL)
   requestLog: { count: 0, last_model: "", last_path: "", last_target: "", last_status: null },
@@ -60,6 +62,8 @@ function adoptState(s) {
   ui.models = s.models || [];
   ui.selected = s.selected_model || "";
   ui.listenAddr = s.listen_addr || "";
+  ui.exposeToNetwork = !!s.expose_to_network;
+  ui.proxyToken = s.proxy_token || null;
   ui.endpoint = s.endpoint_url || "";
   ui.activeApi = s.active_api || null;
   ui.requestLog = s.request_log || ui.requestLog;
@@ -96,6 +100,24 @@ function endpointError(url) {
   if (!/^https?:\/\//i.test(u)) return "URL must start with http:// or https://";
   if (!detectApi(u)) return "URL must end in /chat/completions or /responses (not just /v1).";
   return null;
+}
+
+// Host portion of a host:port listen address (handles bracketed IPv6).
+function listenHost(addr) {
+  const a = String(addr || "").trim();
+  if (a.startsWith("[")) {
+    const i = a.indexOf("]");
+    return i > 0 ? a.slice(1, i) : "";
+  }
+  const i = a.lastIndexOf(":");
+  return i >= 0 ? a.slice(0, i) : a;
+}
+
+// Whether a listen address binds to loopback only (mirrors the backend rule, so
+// the UI can warn before the backend rejects a non-loopback bind).
+function isLoopbackListenAddr(addr) {
+  const h = listenHost(addr).toLowerCase();
+  return h === "localhost" || h === "::1" || /^127\./.test(h);
 }
 
 async function loadAgents() {
@@ -342,6 +364,18 @@ function renderEndpoint() {
 
   const listenInput = $("listen-input");
   if (document.activeElement !== listenInput) listenInput.value = ui.listenAddr || "";
+  renderExpose();
+}
+
+// Reflects the network-exposure opt-in and its gateway token.
+function renderExpose() {
+  $("expose-toggle").classList.toggle("is-on", ui.exposeToNetwork);
+  const row = $("token-row");
+  row.hidden = !ui.exposeToNetwork;
+  if (ui.exposeToNetwork) {
+    const input = $("token-input");
+    if (document.activeElement !== input) input.value = ui.proxyToken || "";
+  }
 }
 
 // ───────────────────────── full render ─────────────────────────
@@ -436,6 +470,10 @@ async function applyListen(addr) {
     toast("Listen address must be host:port (e.g. 127.0.0.1:8080).", "err");
     return;
   }
+  if (!isLoopbackListenAddr(a) && !ui.exposeToNetwork) {
+    toast('Turn on "expose to network" before binding beyond 127.0.0.1.', "err");
+    return;
+  }
   try {
     const s = await invoke("set_listen_addr", { addr: a });
     adoptState(s);
@@ -443,6 +481,44 @@ async function applyListen(addr) {
     toast(`Listening on ${ui.listenAddr} — proxy restarted.`);
   } catch (e) {
     toast(String(e), "err");
+  }
+}
+
+// ───────────────────────── actions: network exposure ─────────────────────────
+async function toggleExpose() {
+  const enable = !ui.exposeToNetwork;
+  try {
+    const s = await invoke("set_expose_to_network", { enabled: enable });
+    adoptState(s);
+    render();
+    toast(
+      enable
+        ? "Network exposure on — remote clients need the token below."
+        : "Network exposure off."
+    );
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
+async function regenToken() {
+  try {
+    const s = await invoke("regenerate_proxy_token");
+    adoptState(s);
+    render();
+    toast("Gateway token regenerated.");
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
+async function copyToken() {
+  if (!ui.proxyToken) return;
+  try {
+    await navigator.clipboard.writeText(ui.proxyToken);
+    toast("Token copied.");
+  } catch {
+    toast("Couldn't access the clipboard.", "err");
   }
 }
 
@@ -612,6 +688,9 @@ function bind() {
   $("listen-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") applyListen($("listen-input").value);
   });
+  $("expose-toggle").onclick = toggleExpose;
+  $("copy-token-btn").onclick = copyToken;
+  $("regen-token-btn").onclick = regenToken;
 
   $("save-key-btn").onclick = saveKey;
   $("api-key-input").addEventListener("keydown", (e) => {

@@ -4,6 +4,7 @@
 //! forwarding logic (model swap, API key injection, response streaming),
 //! so it can be fully tested on any platform.
 
+mod atomic_io;
 mod config;
 mod models;
 mod proxy;
@@ -15,7 +16,8 @@ pub use config::{Config, ConfigError};
 pub use models::{classify_model, ModelInfo, ModelKind};
 pub use proxy::{build_router, fetch_models, fetch_models_from};
 pub use settings::{
-    validate_endpoint_url, validate_listen_addr, ApiKind, RuntimeConfig, DEFAULT_LISTEN_ADDR,
+    generate_proxy_token, is_loopback_listen_addr, validate_endpoint_url, validate_listen_addr,
+    ApiKind, RuntimeConfig, DEFAULT_LISTEN_ADDR,
 };
 pub use state::{AppState, RequestLog};
 pub use ui_state::UiStateFile;
@@ -46,10 +48,19 @@ pub async fn serve_with(
     if let Ok(addr) = listener.local_addr() {
         tracing::info!("proxy listening on http://{addr}");
     }
-    let router = build_router(state);
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
+    // The gateway-auth layer needs the client's peer address, so the service is
+    // wired with `ConnectInfo<SocketAddr>`. Non-loopback peers are rejected
+    // unless they present the gateway token (loopback always passes).
+    let router = build_router(state.clone()).layer(axum::middleware::from_fn_with_state(
+        state,
+        proxy::gateway_auth,
+    ));
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 /// Logs warnings for configurations that could leak the API key. The proxy
@@ -66,8 +77,9 @@ fn warn_on_insecure_config(state: &AppState) {
     if !loopback {
         tracing::warn!(
             addr = %listen_addr,
-            "proxy is NOT bound to loopback — it will inject your API key for ANY client \
-             that can reach this address; use 127.0.0.1 unless you really mean to expose it"
+            "proxy is bound beyond loopback — non-loopback clients must present the \
+             gateway token, but it still injects your API key on their behalf; use \
+             127.0.0.1 unless you really mean to expose it"
         );
     }
     let endpoint = state.endpoint_url();

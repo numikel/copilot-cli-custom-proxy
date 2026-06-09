@@ -3,13 +3,15 @@ use crate::settings::RuntimeConfig;
 use crate::state::AppState;
 use axum::{
     body::{Body, Bytes},
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::any,
     Router,
 };
 use secrecy::{ExposeSecret, SecretString};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 /// Maximum buffered request body size (100 MB).
@@ -41,6 +43,49 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// Whether a client peer may use the proxy. Loopback peers always may (the
+/// local CLI launcher and same-machine tools). A non-loopback peer — only
+/// reachable when the user opted into network exposure — must present the
+/// gateway token as `Authorization: Bearer <token>`. Fails closed: no token
+/// configured ⇒ no non-loopback client is allowed.
+pub(crate) fn peer_is_authorized(peer: IpAddr, provided: Option<&str>, token: Option<&str>) -> bool {
+    if peer.is_loopback() {
+        return true;
+    }
+    match token {
+        Some(t) if !t.is_empty() => provided == Some(format!("Bearer {t}").as_str()),
+        _ => false,
+    }
+}
+
+/// Axum middleware enforcing [`peer_is_authorized`] before a request reaches the
+/// proxy handler. The client's `Authorization` header carries the gateway token
+/// (it is replaced with the upstream key downstream, so reusing the header is
+/// safe). Added only on the production serve path, where the listener is wired
+/// with `ConnectInfo<SocketAddr>`.
+pub(crate) async fn gateway_auth(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let token = state.proxy_token();
+    if peer_is_authorized(peer.ip(), provided, token.as_deref()) {
+        next.run(req).await
+    } else {
+        error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized: this proxy is exposed to the network and requires a \
+             valid token in the Authorization header."
+                .to_string(),
+        )
+    }
+}
+
 /// Fetches the available models from the configured endpoint's `/models`,
 /// classifying each id. Thin wrapper over [`fetch_models_from`] that reads the
 /// live endpoint URL and key from [`AppState`].
@@ -65,6 +110,7 @@ pub async fn fetch_models_from(
         listen_addr: String::new(),
         endpoint_url: endpoint_url.to_string(),
         default_model: None,
+        ..RuntimeConfig::default()
     };
     let url = probe
         .models_url()
@@ -268,4 +314,33 @@ fn error_response(status: StatusCode, message: String) -> Response {
         HeaderValue::from_static("application/json"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    const LAN: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
+
+    #[test]
+    fn loopback_peer_never_needs_a_token() {
+        assert!(peer_is_authorized(LOOPBACK, None, None));
+        assert!(peer_is_authorized(LOOPBACK, None, Some("secret")));
+        assert!(peer_is_authorized(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), None, None));
+    }
+
+    #[test]
+    fn non_loopback_peer_requires_the_matching_token() {
+        // No token configured → fail closed.
+        assert!(!peer_is_authorized(LAN, Some("Bearer x"), None));
+        assert!(!peer_is_authorized(LAN, Some("Bearer x"), Some("")));
+        // Missing / wrong header → rejected.
+        assert!(!peer_is_authorized(LAN, None, Some("secret")));
+        assert!(!peer_is_authorized(LAN, Some("secret"), Some("secret"))); // no "Bearer " prefix
+        assert!(!peer_is_authorized(LAN, Some("Bearer nope"), Some("secret")));
+        // Correct token → allowed.
+        assert!(peer_is_authorized(LAN, Some("Bearer secret"), Some("secret")));
+    }
 }

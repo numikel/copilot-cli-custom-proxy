@@ -128,7 +128,9 @@ no network access. It has five sections:
 - **Endpoint** — the full upstream URL with a **Chat completions ⟷ Responses**
   switch (one active at a time; the switch rewrites the URL suffix), plus the
   local **listen address**. Both are validated and persisted to `config.json`;
-  changing the listen address restarts the proxy task.
+  changing the listen address restarts the proxy task. An **"expose to network"**
+  toggle lets you bind beyond loopback on purpose — see
+  [Exposing the proxy on your network](#exposing-the-proxy-on-your-network).
 - **API key** — paste your key (held in memory only; a **forget** link clears it).
 - **Model** — searchable list of the upstream catalog with a **"hide non-chat"**
   toggle. Models are classified in `proxy-core` (chat vs the `embed` / `image` /
@@ -224,9 +226,11 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
 
 - The API key is kept in memory only (wrapped in `secrecy::SecretString`):
   never written to disk, never logged, never returned to the UI.
-- **Keep `listen_addr` on loopback** (`127.0.0.1`). The proxy injects your API
-  key into every forwarded request, so binding to a non-loopback address would
-  let anything on the network use your key. The app logs a warning if you do.
+- **The proxy is loopback-only by default** (`127.0.0.1`). It injects your API
+  key into every forwarded request, so a non-loopback bind would let anything on
+  the network use your key. Binding beyond loopback is therefore an explicit
+  opt-in protected by a gateway token — see
+  [Exposing the proxy on your network](#exposing-the-proxy-on-your-network).
 - Use an `https://` endpoint — a non-HTTPS endpoint URL sends the key
   unencrypted (the app warns about this too).
 - Don't embed credentials in the endpoint URL (`https://user:pass@host/…`) — such
@@ -235,6 +239,28 @@ Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
   `config.json` is loaded at startup; an invalid hand-edited value falls back to a
   safe default instead of being trusted.
 - The settings window loads only local, static assets under a restrictive CSP.
+
+### Exposing the proxy on your network
+
+By default the proxy binds to `127.0.0.1` and only the local machine can reach
+it. To let another device (e.g. a second machine on your LAN) use the proxy:
+
+1. In the settings window, turn on **"expose to network"** under the listen
+   address. This generates a **gateway token** and reveals it (with **copy** and
+   **regenerate** actions).
+2. Set the listen address to a reachable interface — e.g. `0.0.0.0:8080` to bind
+   all interfaces. (Without the opt-in, a non-loopback address is rejected, and a
+   hand-edited `config.json` with one is reset to loopback on startup.)
+3. On the remote client, point it at `http://<this-machine-ip>:8080` and send the
+   gateway token in the `Authorization` header: `Authorization: Bearer <token>`.
+
+Loopback clients (including the locally launched Copilot/Codex agents, which
+always connect via `127.0.0.1`) never need the token — it gates non-loopback
+peers only. The token is a self-generated credential for *this proxy*, separate
+from your upstream API key; it is stored in `config.json` so a remote device need
+not re-pair after a restart. Regenerate it to revoke access. Even token-gated,
+remember the proxy spends your upstream key on behalf of any authorized client —
+only expose it on networks you trust.
 
 ## Notes
 

@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-06-09
+
+### Security
+- **Network exposure is now opt-in and token-protected** — by default the proxy
+  binds to loopback only. Binding beyond `127.0.0.1` requires turning on a new
+  *Expose to network* switch in the settings window, which mints a gateway token.
+  Once exposed, requests from non-loopback clients must carry that token as
+  `Authorization: Bearer <token>` or are rejected with `401`; loopback clients
+  (including the locally launched CLI agents) are exempt. The token is shown in
+  the UI with copy/regenerate actions and persists in `config.json` (it is a
+  self-generated gateway credential, distinct from your upstream API key, which
+  stays in memory only). A non-loopback address without the opt-in is reset to
+  the loopback default on load.
+
+### Fixed
+- **Models with unlucky names are no longer hidden** — model classification now
+  matches on word boundaries instead of raw substrings, so ids like `watts-3b`
+  or `vanguard-instruct` are correctly treated as chat models rather than being
+  filed as audio/moderation and dropped from the tray.
+- **Corrupt config/preferences are reported, not silently dropped** — when
+  `config.json` or `ui_state.json` is present but unparseable, the reason is now
+  logged (a missing file stays silent, as before) so a lost configuration is
+  diagnosable.
+- **Crash-safe writes** — `config.json` and `ui_state.json` are written to a
+  temporary file and atomically renamed into place, so an interrupted write
+  (crash, forced kill, power loss) can no longer leave a truncated file.
+- **No lost updates to tray-visibility preferences** — the read-modify-write of
+  `ui_state.json` is serialized, so concurrent saves can't clobber each other.
+
+### Changed
+- The launched CLI agents always target the proxy via `127.0.0.1` (using the
+  configured port), even when the proxy is bound to a wildcard/LAN address — so
+  the local launch path keeps working without the gateway token.
+- `proxy-core` adds `is_loopback_listen_addr`, `generate_proxy_token`, and the
+  `expose_to_network` / `proxy_token` runtime-config fields; the served router
+  now enforces a peer-aware gateway-auth layer. New Tauri commands
+  `set_expose_to_network` and `regenerate_proxy_token`.
+
 ## [0.3.1] — 2026-06-09
 
 ### Security

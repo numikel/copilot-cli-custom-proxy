@@ -40,6 +40,7 @@ async fn main() {
         listen_addr: "127.0.0.1:0".to_string(),
         endpoint_url: format!("{upstream}/chat/completions"),
         default_model: Some("model-a".to_string()),
+        ..RuntimeConfig::default()
     };
     let state = Arc::new(AppState::new(config));
     state.set_models(vec![classify_model("model-a"), classify_model("model-b")]);
