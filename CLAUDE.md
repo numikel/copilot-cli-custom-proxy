@@ -123,3 +123,31 @@ cargo tauri dev                 # manual — no config needed; first run opens s
 Config lives in `config.json` next to the exe (written by the settings window);
 `config.toml` is an optional one-time seed. Version is shared via
 `[workspace.package]`; bump it **and** `tauri.conf.json`.
+
+## Release
+
+CI (`.github/workflows/ci.yml`) builds the Windows exe + MSI/NSIS bundles on
+**every** push, but uploads them only as run **artifacts** (Actions → run →
+Artifacts, ~90-day retention). A GitHub **Release** is published *only* by the
+`Attach to GitHub Release` step, which is gated on `refs/tags/v*`. **No tag ⇒ no
+release** — pushing commits or merging a PR never publishes one.
+
+To cut a release:
+
+1. Bump `version` in **both** `Cargo.toml` (`[workspace.package]`) and
+   `src-tauri/tauri.conf.json` — they **must match the tag**. The release assets
+   are named from `tauri.conf.json` (e.g. `Copilot.Proxy_0.3.3_x64-setup.exe`),
+   so a mismatch ships mislabeled installers.
+2. Merge to `main` and let CI go green.
+3. Tag the **`main` tip** (not a feature branch) and push the tag:
+   ```bash
+   git tag -a vX.Y.Z <main-sha> -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+   The pushed tag triggers a fresh CI run; on success the release appears under
+   **Releases** with `copilot-proxy.exe`, `*.msi`, and `*-setup.exe` attached.
+
+Gotchas:
+- Tagging only locally does nothing — the workflow fires on the **pushed** tag.
+- Tag a commit that already lives on `main`, else you publish feature-branch code.
+- Verify with `gh release view vX.Y.Z --json assets` (expect 3 assets).
