@@ -155,8 +155,7 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 app.exit(0);
             } else if let Some(agent_id) = id.strip_prefix("run::") {
                 if let Some(kind) = crate::commands::Agent::from_id(agent_id) {
-                    let state = app.state::<Arc<AppState>>();
-                    if let Err(e) = crate::commands::launch_agent(&state, kind) {
+                    if let Err(e) = crate::commands::launch_agent(app, kind) {
                         tracing::error!("failed to launch {agent_id}: {e}");
                     }
                 }

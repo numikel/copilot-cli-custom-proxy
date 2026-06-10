@@ -68,6 +68,9 @@ function adoptState(s) {
   ui.activeApi = s.active_api || null;
   ui.requestLog = s.request_log || ui.requestLog;
   ui.visible = new Set(s.visible_models || []);
+  // Backend-tracked launched-agent terminal — the poll makes this the source of
+  // truth for the "live" badge (covers launches from the tray too).
+  ui.running = s.running_agent || null;
 }
 
 async function loadState() {

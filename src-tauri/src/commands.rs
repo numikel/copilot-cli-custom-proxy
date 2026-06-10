@@ -1,6 +1,6 @@
 use proxy_core::{AppState, ModelInfo, RequestLog};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 
 /// State view passed to the UI (without exposing the API key itself).
@@ -27,10 +27,13 @@ pub struct StateView {
     pub proxy_token: Option<String>,
     /// Live snapshot of forwarded traffic, so the UI can show what Copilot hits.
     pub request_log: RequestLog,
+    /// Id of the most recently launched agent whose terminal is still open
+    /// (see [`AgentWatch`]), or `None` when no launched terminal is running.
+    pub running_agent: Option<String>,
 }
 
 /// Builds the JS-facing view from current state.
-fn state_view(state: &AppState) -> StateView {
+fn state_view(state: &AppState, watch: &AgentWatch) -> StateView {
     StateView {
         models: state.models(),
         selected_model: state.selected_model(),
@@ -42,12 +45,13 @@ fn state_view(state: &AppState) -> StateView {
         expose_to_network: state.expose_to_network(),
         proxy_token: state.proxy_token(),
         request_log: state.request_log(),
+        running_agent: watch.running_id().map(String::from),
     }
 }
 
 #[tauri::command]
-pub fn get_state(state: State<'_, Arc<AppState>>) -> StateView {
-    state_view(&state)
+pub fn get_state(state: State<'_, Arc<AppState>>, watch: State<'_, AgentWatch>) -> StateView {
+    state_view(&state, &watch)
 }
 
 /// Sets the upstream endpoint URL (must end in /chat/completions or /responses)
@@ -87,7 +91,7 @@ pub async fn set_endpoint(app: AppHandle, url: String) -> Result<StateView, Stri
 
     state.swap_endpoint(url, models);
     let _ = crate::tray::apply_menu(&app);
-    Ok(state_view(&state))
+    Ok(state_view(&state, &app.state::<AgentWatch>()))
 }
 
 /// Sets the local listen address (validated as host:port) and restarts the
@@ -117,7 +121,7 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
     }
 
     if !listen_addr_changed(&state.listen_addr(), &addr) {
-        return Ok(state_view(&state));
+        return Ok(state_view(&state, &app.state::<AgentWatch>()));
     }
 
     // Bind the new address before touching the running server. A different
@@ -137,7 +141,7 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
     task.spawn(listener, state.clone());
 
     let _ = crate::tray::apply_menu(&app);
-    Ok(state_view(&state))
+    Ok(state_view(&state, &app.state::<AgentWatch>()))
 }
 
 /// Whether a candidate listen address differs from the current one (trimmed
@@ -165,7 +169,7 @@ pub fn set_expose_to_network(app: AppHandle, enabled: bool) -> Result<StateView,
     let state = app.state::<Arc<AppState>>().inner().clone();
     state.set_expose_to_network(enabled);
     let _ = crate::tray::apply_menu(&app);
-    Ok(state_view(&state))
+    Ok(state_view(&state, &app.state::<AgentWatch>()))
 }
 
 /// Replaces the gateway token with a freshly generated one (so a leaked token
@@ -174,7 +178,7 @@ pub fn set_expose_to_network(app: AppHandle, enabled: bool) -> Result<StateView,
 pub fn regenerate_proxy_token(app: AppHandle) -> Result<StateView, String> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     state.regenerate_proxy_token();
-    Ok(state_view(&state))
+    Ok(state_view(&state, &app.state::<AgentWatch>()))
 }
 
 /// Stores the upstream API key in memory and rebuilds the tray so its icon
@@ -302,8 +306,63 @@ pub(crate) fn agent_supported(state: &AppState, agent: Agent) -> bool {
         .unwrap_or(false)
 }
 
+/// Tracks the most recently launched agent terminal so the UI's "live" badge
+/// reflects reality (the settings webview polls it via [`StateView`]). The
+/// semantics are deliberately terminal-scoped: the launched `Child` is the
+/// PowerShell window (started with `-NoExit`), so "running" means "the terminal
+/// we opened is still open" — the agent inside may exit earlier.
+///
+/// Single-slot by design: launching again (even the other agent) supersedes the
+/// previous entry, and a generation counter makes sure a *stale* terminal's
+/// exit never clears the newer entry. Trade-off: with two terminals open the
+/// badge follows only the most recent one — best effort, acceptable for a
+/// status pill.
+#[derive(Default)]
+pub struct AgentWatch(Mutex<AgentWatchInner>);
+
+#[derive(Default)]
+struct AgentWatchInner {
+    generation: u64,
+    running: Option<Agent>,
+}
+
+impl AgentWatchInner {
+    /// Records a launch and returns its generation token (pure, unit-testable).
+    fn launch(&mut self, agent: Agent) -> u64 {
+        self.generation += 1;
+        self.running = Some(agent);
+        self.generation
+    }
+
+    /// Clears the entry, but only if it still belongs to this launch — a newer
+    /// launch must not be wiped out by an older terminal closing.
+    fn exited(&mut self, generation: u64) {
+        if self.generation == generation {
+            self.running = None;
+        }
+    }
+}
+
+impl AgentWatch {
+    /// Records a launch and returns the generation to pass to [`Self::exited`].
+    pub fn launch(&self, agent: Agent) -> u64 {
+        self.0.lock().unwrap().launch(agent)
+    }
+
+    /// Marks the launch identified by `generation` as exited.
+    pub fn exited(&self, generation: u64) {
+        self.0.lock().unwrap().exited(generation)
+    }
+
+    /// Id of the currently running agent terminal, if any.
+    pub fn running_id(&self) -> Option<&'static str> {
+        self.0.lock().unwrap().running.map(Agent::id)
+    }
+}
+
 #[tauri::command]
-pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), String> {
+pub fn run_agent(app: AppHandle, agent: String) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
     let kind = Agent::from_id(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
     if !agent_supported(&state, kind) {
         let active = state
@@ -316,14 +375,32 @@ pub fn run_agent(state: State<'_, Arc<AppState>>, agent: String) -> Result<(), S
             kind.api(),
         ));
     }
-    launch_agent(&state, kind)
+    launch_agent(&app, kind)
 }
 
 /// Opens a new terminal with the proxy environment set and starts the selected
 /// agent pointed at the proxy. Shared by the tray menu and the settings window.
-pub fn launch_agent(state: &AppState, kind: Agent) -> Result<(), String> {
+/// The spawned terminal is registered in [`AgentWatch`] and watched until it
+/// exits, so the UI's "live" indicator clears itself.
+pub fn launch_agent(app: &AppHandle, kind: Agent) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>();
     let base_url = local_base_url(&state.listen_addr());
-    spawn_agent(kind, &base_url).map_err(|e| e.to_string())
+    let child = spawn_agent(kind, &base_url).map_err(|e| e.to_string())?;
+    watch_agent(app, kind, child);
+    Ok(())
+}
+
+/// Registers a launched terminal and clears the registration once its process
+/// exits. `Child::wait` blocks, so the wait runs on the blocking pool — parking
+/// an async worker thread on it could starve the runtime (which also serves the
+/// proxy).
+fn watch_agent(app: &AppHandle, kind: Agent, mut child: std::process::Child) {
+    let generation = app.state::<AgentWatch>().launch(kind);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = child.wait();
+        app.state::<AgentWatch>().exited(generation);
+    });
 }
 
 /// The base URL a *local* agent should use to reach the proxy. When the proxy
@@ -353,7 +430,7 @@ fn listen_port(addr: &str) -> Option<&str> {
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<()> {
+fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     // CREATE_NEW_CONSOLE — give the spawned PowerShell its own visible window.
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -382,8 +459,7 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<()> {
         }
     }
 
-    command.spawn()?;
-    Ok(())
+    command.spawn()
 }
 
 /// Builds the `codex` invocation that points an ephemeral provider at the proxy.
@@ -417,7 +493,7 @@ fn codex_command(base_url: &str) -> std::io::Result<String> {
 const CODEX_KEY_ENV: &str = "CODEX_PROXY_KEY";
 
 #[cfg(not(target_os = "windows"))]
-fn spawn_agent(_kind: Agent, _base_url: &str) -> std::io::Result<()> {
+fn spawn_agent(_kind: Agent, _base_url: &str) -> std::io::Result<std::process::Child> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "Launching an agent is only supported on Windows",
@@ -465,6 +541,39 @@ mod tests {
         assert!(proxy_core::validate_endpoint_url("https://e.example/v1/responses").is_ok());
         assert!(proxy_core::validate_listen_addr("127.0.0.1:8080").is_ok());
         assert!(proxy_core::validate_listen_addr("nope").is_err());
+    }
+
+    #[test]
+    fn agent_watch_tracks_latest_launch() {
+        let watch = AgentWatch::default();
+        assert_eq!(watch.running_id(), None);
+
+        let g1 = watch.launch(Agent::Copilot);
+        assert_eq!(watch.running_id(), Some("copilot"));
+
+        // A newer launch supersedes the previous terminal...
+        let g2 = watch.launch(Agent::Codex);
+        assert_eq!(watch.running_id(), Some("codex"));
+
+        // ...so the stale terminal closing must not clear the newer entry.
+        watch.exited(g1);
+        assert_eq!(watch.running_id(), Some("codex"));
+
+        watch.exited(g2);
+        assert_eq!(watch.running_id(), None);
+    }
+
+    #[test]
+    fn state_view_reports_running_agent() {
+        let s = state_with_endpoint("");
+        let watch = AgentWatch::default();
+        assert_eq!(state_view(&s, &watch).running_agent, None);
+
+        watch.launch(Agent::Copilot);
+        assert_eq!(
+            state_view(&s, &watch).running_agent.as_deref(),
+            Some("copilot")
+        );
     }
 
     #[test]
