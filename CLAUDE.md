@@ -80,7 +80,16 @@ Cargo workspace, two members:
     wildcard/non-loopback listen address to `127.0.0.1:<port>` for the launched
     agents (loopback peer ⇒ no token needed). `Agent` enum + `agent_supported()`
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,
-    `active_api`, `expose_to_network`, `proxy_token`) is the JS↔Rust contract.
+    `active_api`, `expose_to_network`, `proxy_token`, `running_agent`) is the
+    JS↔Rust contract. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
+    deliberately **single-slot** registry of the launched agent terminal: `launch`
+    bumps a generation counter, `exited(gen)` clears only its own generation (a
+    stale terminal's exit can't clobber a newer launch); the inner logic is pure
+    and unit-tested. `launch_agent` keeps the spawned `Child` and watches it on
+    `tauri::async_runtime::spawn_blocking` (`Child::wait()` blocks) — closing the
+    terminal window clears `running_agent` within one UI poll. Windows-only spawn
+    bits (`creation_flags`) stay `#[cfg(windows)]`-gated with a non-Windows
+    counterpart, because CI clippy runs on ubuntu.
   - `main.rs` — Builder, config resolution (`config.json` → `config.toml` seed →
     defaults; loaded values pass through `sanitize_config` — invalid `listen_addr`
     → loopback default, invalid `endpoint_url` → cleared, non-loopback addr without
@@ -92,7 +101,19 @@ Cargo workspace, two members:
     a pre-bound listener.
   - `dist/` — settings **webview** (vanilla JS, no bundler; `withGlobalTauri`).
     `index.html` + `styles.css` (ported 1:1 from the design) + `app.js` (state
-    machine) + `fonts/` (local IBM Plex woff2).
+    machine) + `validation.js` + `fonts/` (local IBM Plex woff2).
+    `validation.js` holds the **pure** helpers (`detectApi`, `endpointError`,
+    `listenAddrError`, …) as a classic script (globals) with a trailing
+    `module.exports` guard, so the same file runs in the webview **and** under
+    `node --test` (`src-tauri/webview-tests/`, outside `dist/` so it doesn't
+    ship). `listenAddrError` mirrors `proxy-core`'s `validate_listen_addr` —
+    keep them in sync; JS validation is pre-flight UX only, the backend
+    re-validates everything. Webview conventions: long-running actions take an
+    in-flight guard (`setRefreshSpinning` / `setEndpointBusy` — flag set before
+    the first `await`, cleared in `finally`, early-return also catches the
+    Enter path); the `loading`/`error` phases are sticky — a **successful
+    action** clears them explicitly, never `adoptState` (the 1.5 s poll would
+    mask fresh errors).
 
 ## Conventions / gotchas
 
@@ -114,9 +135,10 @@ Cargo workspace, two members:
 
 ```bash
 cargo test -p proxy-core        # unit + integration (classification, atomic_io, gateway auth, swap, streaming, endpoint, loopback)
-cargo test -p copilot-proxy     # agent gating, endpoint/listen validation, local_base_url
+cargo test -p copilot-proxy     # agent gating, endpoint/listen validation, local_base_url, agent watch
 cargo check --all-targets
 cargo clippy --all-targets
+node --test "src-tauri/webview-tests/*.test.js"   # webview validation helpers (glob form — pointing at the bare dir fails)
 cargo tauri dev                 # manual — no config needed; first run opens settings
 ```
 

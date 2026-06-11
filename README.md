@@ -150,7 +150,10 @@ no network access. It has five sections:
   choice is likewise saved per-endpoint to `ui_state.json` (next to `config.toml`).
 - **Start agent** — one button per known agent, gated against the active
   endpoint's API (the incompatible agent is disabled with a tooltip explaining
-  which API it needs). A copy-able PowerShell command block is shown too.
+  which API it needs). A copy-able PowerShell command block is shown too. The
+  **"live"** indicator reflects the agent terminal the app launched (from this
+  window or from the tray) and clears within ~1.5 s of that terminal being
+  closed.
 - **Status** — live, real values polled from the proxy (~1.5 s): the configured
   endpoint, the active API, the **forwarded** request counter, and the
   **last** request (model → endpoint → status code).
