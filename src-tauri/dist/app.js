@@ -169,7 +169,7 @@ function renderModels() {
     rows.innerHTML = `<div class="cp-empty cp-empty--err">${icon("i-warn", 26)}
       <div class="cp-empty-title">Couldn't load models</div>
       <div class="cp-empty-sub">${esc(ui.errorMsg || "The upstream returned an error.")}</div>
-      <button class="cp-btn cp-btn--ghost cp-btn--sm" id="retry-btn">Retry</button></div>`;
+      <button type="button" class="cp-btn cp-btn--ghost cp-btn--sm" id="retry-btn">Retry</button></div>`;
     $("retry-btn").onclick = doRefresh;
     return;
   }
@@ -234,7 +234,7 @@ function renderAgents() {
         ? `<div class="cp-gatehint">Needs a <code>${esc(a.api)}</code> endpoint</div>`
         : "";
       return `<div class="cp-agent-wrap">
-        <button class="${cls}" data-id="${esc(a.id)}" ${gated ? "disabled" : ""}>
+        <button type="button" class="${cls}" data-id="${esc(a.id)}" ${gated ? "disabled" : ""}>
           ${glyph}<span class="cp-agent-name">Run ${esc(a.label)}</span>${right}
         </button>${hint}
       </div>`;
