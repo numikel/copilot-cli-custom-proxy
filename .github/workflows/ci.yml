@@ -39,6 +39,11 @@ jobs:
       - name: Run core tests
         run: cargo test -p proxy-core
 
+      # Pure webview helpers (dist/validation.js) — Node's built-in runner, no
+      # npm install needed (the runner image ships a recent Node).
+      - name: Run webview tests
+        run: node --test "src-tauri/webview-tests/*.test.js"
+
   build-windows:
     name: Build Windows executable
     runs-on: windows-latest

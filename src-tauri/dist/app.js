@@ -5,6 +5,10 @@
 const invoke = window.__TAURI__.core.invoke;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 
+// Pure URL/address helpers (API_SUFFIX, detectApi, rewriteSuffix,
+// endpointError, listenHost, isLoopbackListenAddr, listenAddrError) live in
+// validation.js, loaded before this file — they are also unit-tested with Node.
+
 // ───────────────────────── client state ─────────────────────────
 const ui = {
   phase: "no-endpoint", // no-endpoint | no-key | loading | ready | error
@@ -24,9 +28,6 @@ const ui = {
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
 };
-
-// API mode suffixes — the endpoint URL must end in one of these.
-const API_SUFFIX = { chat: "/chat/completions", responses: "/responses" };
 
 // Index (within the current filtered display list) of the last visibility
 // checkbox toggled — anchor for shift-click range selection.
@@ -68,56 +69,13 @@ function adoptState(s) {
   ui.activeApi = s.active_api || null;
   ui.requestLog = s.request_log || ui.requestLog;
   ui.visible = new Set(s.visible_models || []);
+  // Backend-tracked launched-agent terminal — the poll makes this the source of
+  // truth for the "live" badge (covers launches from the tray too).
+  ui.running = s.running_agent || null;
 }
 
 async function loadState() {
   adoptState(await invoke("get_state"));
-}
-
-// ───────────────────────── endpoint URL helpers ─────────────────────────
-// The wire API implied by a URL's suffix ("chat" | "responses" | null).
-function detectApi(url) {
-  const u = String(url || "").trim().replace(/\/+$/, "");
-  if (u.endsWith(API_SUFFIX.chat)) return "chat";
-  if (u.endsWith(API_SUFFIX.responses)) return "responses";
-  return null;
-}
-
-// Rewrites a URL's API suffix (swapping chat ⟷ responses, or appending when the
-// URL currently stops at the base, e.g. ".../v1").
-function rewriteSuffix(url, suffix) {
-  let u = String(url || "").trim().replace(/\/+$/, "");
-  if (u.endsWith(API_SUFFIX.chat)) u = u.slice(0, -API_SUFFIX.chat.length);
-  else if (u.endsWith(API_SUFFIX.responses)) u = u.slice(0, -API_SUFFIX.responses.length);
-  u = u.replace(/\/+$/, "");
-  return u + suffix;
-}
-
-// Client-side endpoint validation mirroring the backend rule. Returns an error
-// string, or null when valid.
-function endpointError(url) {
-  const u = String(url || "").trim();
-  if (!/^https?:\/\//i.test(u)) return "URL must start with http:// or https://";
-  if (!detectApi(u)) return "URL must end in /chat/completions or /responses (not just /v1).";
-  return null;
-}
-
-// Host portion of a host:port listen address (handles bracketed IPv6).
-function listenHost(addr) {
-  const a = String(addr || "").trim();
-  if (a.startsWith("[")) {
-    const i = a.indexOf("]");
-    return i > 0 ? a.slice(1, i) : "";
-  }
-  const i = a.lastIndexOf(":");
-  return i >= 0 ? a.slice(0, i) : a;
-}
-
-// Whether a listen address binds to loopback only (mirrors the backend rule, so
-// the UI can warn before the backend rejects a non-loopback bind).
-function isLoopbackListenAddr(addr) {
-  const h = listenHost(addr).toLowerCase();
-  return h === "localhost" || h === "::1" || /^127\./.test(h);
 }
 
 async function loadAgents() {
@@ -211,7 +169,7 @@ function renderModels() {
     rows.innerHTML = `<div class="cp-empty cp-empty--err">${icon("i-warn", 26)}
       <div class="cp-empty-title">Couldn't load models</div>
       <div class="cp-empty-sub">${esc(ui.errorMsg || "The upstream returned an error.")}</div>
-      <button class="cp-btn cp-btn--ghost cp-btn--sm" id="retry-btn">Retry</button></div>`;
+      <button type="button" class="cp-btn cp-btn--ghost cp-btn--sm" id="retry-btn">Retry</button></div>`;
     $("retry-btn").onclick = doRefresh;
     return;
   }
@@ -258,7 +216,13 @@ function renderModels() {
 }
 
 // ───────────────────────── render: agents + commands ─────────────────────────
+// The running id the agent grid last drew. The 1.5 s poll re-renders the grid
+// only when this goes stale (launch/exit transition) — rebuilding the buttons
+// every tick would steal focus and reset hover/active states for no reason.
+let renderedRunning = null;
+
 function renderAgents() {
+  renderedRunning = ui.running;
   const grid = $("agent-grid");
   $("agent-meta").textContent = `${ui.agents.length} CLI${ui.agents.length === 1 ? "" : "s"}`;
   grid.innerHTML = ui.agents
@@ -276,7 +240,7 @@ function renderAgents() {
         ? `<div class="cp-gatehint">Needs a <code>${esc(a.api)}</code> endpoint</div>`
         : "";
       return `<div class="cp-agent-wrap">
-        <button class="${cls}" data-id="${esc(a.id)}" ${gated ? "disabled" : ""}>
+        <button type="button" class="${cls}" data-id="${esc(a.id)}" ${gated ? "disabled" : ""}>
           ${glyph}<span class="cp-agent-name">Run ${esc(a.label)}</span>${right}
         </button>${hint}
       </div>`;
@@ -289,7 +253,10 @@ function renderAgents() {
 }
 
 function commandText() {
-  const listen = ui.listenAddr || "127.0.0.1:8788";
+  // Fallback only renders before the first loadState — keep it equal to the
+  // backend's DEFAULT_LISTEN_ADDR so a copied command never targets a port the
+  // proxy doesn't listen on.
+  const listen = ui.listenAddr || "127.0.0.1:8080";
   const supported = ui.agents.filter((a) => a.enabled).map((a) => a.id);
   const first = supported[0] || "copilot";
   const others = supported.slice(1);
@@ -390,10 +357,13 @@ function render() {
 }
 
 // Lightweight render for polling: never touches the model rows or key input,
-// so it won't steal focus or reset the user's filter typing.
+// so it won't steal focus or reset the user's filter typing. The agent grid
+// re-renders only when the backend-tracked terminal changed — its "live" badge
+// lives there, and without this the badge would outlive the closed terminal.
 function renderLive() {
   renderPill();
   renderStatus();
+  if (renderedRunning !== ui.running) renderAgents();
   $("model-meta").textContent = `${filteredModels().length}/${ui.models.length}`;
 }
 
@@ -443,17 +413,40 @@ function selectNoneVisible() {
 }
 
 // ───────────────────────── actions: endpoint ─────────────────────────
+// In-flight guard: applyEndpoint has three triggers (Save button, Enter in the
+// input, the API-mode chips) and each call refetches models + adopts state, so
+// two overlapping calls could interleave their adoptState in either order.
+// Disabling the buttons is feedback; the early return is the actual guard
+// (Enter doesn't respect `disabled`).
+let endpointBusy = false;
+
+function setEndpointBusy(on) {
+  endpointBusy = on;
+  ["save-endpoint-btn", "api-chat", "api-responses"].forEach((id) => {
+    $(id).disabled = on;
+  });
+}
+
 async function applyEndpoint(url) {
+  if (endpointBusy) return;
   const err = endpointError(url);
   if (err) {
     toast(err, "err");
     return;
   }
+  setEndpointBusy(true);
   try {
     // Backend validates, persists, clears the old catalog, and — if a key is
     // set — refetches models, returning the resulting StateView.
     const s = await invoke("set_endpoint", { url: url.trim() });
     adoptState(s);
+    // The user just applied a working endpoint — un-stick a stale error phase
+    // (recomputePhase keeps "error" until explicitly cleared) so the UI stops
+    // showing an outdated failure. Done only on this success path, never in
+    // adoptState: the 1.5 s poll also calls adoptState and would mask fresh
+    // refresh errors.
+    ui.phase = "ready";
+    ui.errorMsg = "";
     // Agent gating depends on the active API, which just changed — reload it so
     // the right CLI (Copilot for chat / Codex for responses) enables.
     await loadAgents().catch(() => {});
@@ -461,13 +454,16 @@ async function applyEndpoint(url) {
     toast(`Endpoint set — ${ui.activeApi || "?"} API.`);
   } catch (e) {
     toast(String(e), "err");
+  } finally {
+    setEndpointBusy(false);
   }
 }
 
 async function applyListen(addr) {
   const a = addr.trim();
-  if (!/^[^\s:]+:\d{1,5}$/.test(a)) {
-    toast("Listen address must be host:port (e.g. 127.0.0.1:8080).", "err");
+  const err = listenAddrError(a);
+  if (err) {
+    toast(err, "err");
     return;
   }
   if (!isLoopbackListenAddr(a) && !ui.exposeToNetwork) {
@@ -530,14 +526,26 @@ async function saveKey() {
     toast("Enter your API key first.", "err");
     return;
   }
-  await invoke("set_api_key", { key });
+  // Only the invoke is guarded: state mutations happen strictly after success
+  // (no premature hasApiKey=true), and doRefresh handles its own errors.
+  try {
+    await invoke("set_api_key", { key });
+  } catch (e) {
+    toast(String(e), "err");
+    return;
+  }
   ui.hasApiKey = true;
   input.value = "";
   await doRefresh(true);
 }
 
 async function forgetKey() {
-  await invoke("forget_api_key");
+  try {
+    await invoke("forget_api_key");
+  } catch (e) {
+    toast(String(e), "err");
+    return;
+  }
   ui.hasApiKey = false;
   ui.models = [];
   ui.selected = "";

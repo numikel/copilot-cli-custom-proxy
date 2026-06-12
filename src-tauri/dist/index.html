@@ -43,10 +43,10 @@
     <span class="cp-tb-name">copilot<span>·</span>proxy</span>
   </div>
   <div class="cp-winbtns">
-    <button class="cp-winbtn" id="theme-toggle" title="Toggle theme"><svg width="15" height="15"><use href="#i-sun"/></svg></button>
-    <button class="cp-winbtn" id="win-min" title="Minimize"><svg width="15" height="15"><use href="#i-min"/></svg></button>
-    <button class="cp-winbtn" id="win-max" title="Maximize"><svg width="15" height="15"><use href="#i-max"/></svg></button>
-    <button class="cp-winbtn cp-winbtn--close" id="win-close" title="Close"><svg width="15" height="15"><use href="#i-close"/></svg></button>
+    <button type="button" class="cp-winbtn" id="theme-toggle" title="Toggle theme"><svg width="15" height="15"><use href="#i-sun"/></svg></button>
+    <button type="button" class="cp-winbtn" id="win-min" title="Minimize"><svg width="15" height="15"><use href="#i-min"/></svg></button>
+    <button type="button" class="cp-winbtn" id="win-max" title="Maximize"><svg width="15" height="15"><use href="#i-max"/></svg></button>
+    <button type="button" class="cp-winbtn cp-winbtn--close" id="win-close" title="Close"><svg width="15" height="15"><use href="#i-close"/></svg></button>
   </div>
 </div>
 
@@ -73,12 +73,12 @@
     </div>
     <div class="cp-card">
       <div class="cp-field-row">
-        <input class="cp-input" id="endpoint-input" type="text" placeholder="https://host/v1/chat/completions" autocomplete="off" spellcheck="false" />
-        <button class="cp-btn cp-btn--accent" id="save-endpoint-btn">Save</button>
+        <input class="cp-input" id="endpoint-input" type="text" placeholder="https://host/v1/chat/completions" aria-label="Upstream endpoint URL" autocomplete="off" spellcheck="false" />
+        <button type="button" class="cp-btn cp-btn--accent" id="save-endpoint-btn">Save</button>
       </div>
       <div class="cp-seg" id="api-switch" role="group" aria-label="API mode">
-        <button class="cp-seg-opt" id="api-chat" data-api="chat" data-suffix="/chat/completions">Chat completions</button>
-        <button class="cp-seg-opt" id="api-responses" data-api="responses" data-suffix="/responses">Responses</button>
+        <button type="button" class="cp-seg-opt" id="api-chat" data-api="chat" data-suffix="/chat/completions">Chat completions</button>
+        <button type="button" class="cp-seg-opt" id="api-responses" data-api="responses" data-suffix="/responses">Responses</button>
       </div>
       <div class="cp-key-foot">
         <span class="cp-key-note">
@@ -89,15 +89,15 @@
     </div>
     <div class="cp-card">
       <div class="cp-field-row">
-        <input class="cp-input" id="listen-input" type="text" placeholder="127.0.0.1:8080" autocomplete="off" spellcheck="false" />
-        <button class="cp-btn cp-btn--ghost" id="save-listen-btn">Apply</button>
+        <input class="cp-input" id="listen-input" type="text" placeholder="127.0.0.1:8080" aria-label="Proxy listen address" autocomplete="off" spellcheck="false" />
+        <button type="button" class="cp-btn cp-btn--ghost" id="save-listen-btn">Apply</button>
       </div>
       <div class="cp-key-foot">
         <span class="cp-key-note">
           <svg width="13" height="13"><use href="#i-wifi"/></svg>
           Local proxy address. Changing it restarts the proxy.
         </span>
-        <button class="cp-toggle" id="expose-toggle" title="Allow binding beyond 127.0.0.1 (requires a token)">
+        <button type="button" class="cp-toggle" id="expose-toggle" title="Allow binding beyond 127.0.0.1 (requires a token)">
           <span class="cp-toggle-box"><svg width="11" height="11"><use href="#i-check"/></svg></span>
           expose to network
         </button>
@@ -105,8 +105,8 @@
       <div class="cp-token" id="token-row" hidden>
         <div class="cp-field-row">
           <input class="cp-input cp-mono" id="token-input" type="text" readonly aria-label="Gateway token" />
-          <button class="cp-iconbtn cp-btn--sm" id="copy-token-btn" title="Copy token"><svg width="13" height="13"><use href="#i-copy"/></svg></button>
-          <button class="cp-btn cp-btn--ghost cp-btn--sm" id="regen-token-btn" title="Generate a new token">regenerate</button>
+          <button type="button" class="cp-iconbtn cp-btn--sm" id="copy-token-btn" title="Copy token"><svg width="13" height="13"><use href="#i-copy"/></svg></button>
+          <button type="button" class="cp-btn cp-btn--ghost cp-btn--sm" id="regen-token-btn" title="Generate a new token">regenerate</button>
         </div>
         <span class="cp-key-note cp-token-note">
           <svg width="13" height="13"><use href="#i-warn"/></svg>
@@ -124,15 +124,15 @@
     </div>
     <div class="cp-card">
       <div class="cp-field-row">
-        <input class="cp-input" id="api-key-input" type="password" placeholder="paste your API key…" autocomplete="off" spellcheck="false" />
-        <button class="cp-btn cp-btn--accent" id="save-key-btn">Save</button>
+        <input class="cp-input" id="api-key-input" type="password" placeholder="paste your API key…" aria-label="API key" autocomplete="off" spellcheck="false" />
+        <button type="button" class="cp-btn cp-btn--accent" id="save-key-btn">Save</button>
       </div>
       <div class="cp-key-foot">
         <span class="cp-key-note">
           <svg width="13" height="13"><use href="#i-lock"/></svg>
           Held in memory only — never written to disk.
         </span>
-        <button class="cp-linkbtn" id="forget-key-btn" hidden>forget</button>
+        <button type="button" class="cp-linkbtn" id="forget-key-btn" hidden>forget</button>
       </div>
     </div>
   </section>
@@ -146,21 +146,21 @@
     <div class="cp-filterbar">
       <label class="cp-search">
         <svg width="14" height="14"><use href="#i-search"/></svg>
-        <input class="cp-search-input" id="model-filter" type="text" placeholder="Filter models…" spellcheck="false" />
-        <button class="cp-search-clear" id="filter-clear" hidden><svg width="11" height="11"><use href="#i-x"/></svg></button>
+        <input class="cp-search-input" id="model-filter" type="text" placeholder="Filter models…" aria-label="Filter models" spellcheck="false" />
+        <button type="button" class="cp-search-clear" id="filter-clear" hidden><svg width="11" height="11"><use href="#i-x"/></svg></button>
       </label>
-      <button class="cp-toggle is-on" id="hide-nonchat" title="Hide non-chat models">
+      <button type="button" class="cp-toggle is-on" id="hide-nonchat" title="Hide non-chat models">
         <span class="cp-toggle-box"><svg width="11" height="11"><use href="#i-check"/></svg></span>
         hide non-chat
       </button>
-      <button class="cp-iconbtn" id="refresh-btn" title="Refresh models"><svg width="14" height="14"><use href="#i-refresh"/></svg></button>
+      <button type="button" class="cp-iconbtn" id="refresh-btn" title="Refresh models"><svg width="14" height="14"><use href="#i-refresh"/></svg></button>
     </div>
     <div class="cp-modellist">
       <div class="cp-vis-bar">
         <span class="cp-vis-lbl"><svg width="12" height="12"><use href="#i-eye"/></svg> show in tray</span>
-        <button class="cp-linkbtn cp-vis-act" id="vis-all">all</button>
+        <button type="button" class="cp-linkbtn cp-vis-act" id="vis-all">all</button>
         <span class="cp-vis-sep">·</span>
-        <button class="cp-linkbtn cp-vis-act" id="vis-none">none</button>
+        <button type="button" class="cp-linkbtn cp-vis-act" id="vis-none">none</button>
         <span class="cp-vis-count" id="vis-count">0 in tray</span>
       </div>
       <div class="cp-rows" id="model-rows"><!-- populated by app.js --></div>
@@ -176,7 +176,7 @@
     <div class="cp-agentgrid" id="agent-grid"><!-- populated by app.js --></div>
     <div class="cp-cmdhead">
       <span class="cp-cmdlabel">PowerShell — run manually</span>
-      <button class="cp-iconbtn cp-iconbtn--wide cp-btn--sm" id="copy-cmd"><svg width="13" height="13"><use href="#i-copy"/></svg> copy</button>
+      <button type="button" class="cp-iconbtn cp-iconbtn--wide cp-btn--sm" id="copy-cmd"><svg width="13" height="13"><use href="#i-copy"/></svg> copy</button>
     </div>
     <pre class="cp-pre" id="cmd-block">—</pre>
   </section>
@@ -202,6 +202,7 @@
 <!-- ───────────── Toasts ───────────── -->
 <div class="cp-toasts" id="toasts"></div>
 
+<script src="validation.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

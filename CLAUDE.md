@@ -80,7 +80,17 @@ Cargo workspace, two members:
     wildcard/non-loopback listen address to `127.0.0.1:<port>` for the launched
     agents (loopback peer ⇒ no token needed). `Agent` enum + `agent_supported()`
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,
-    `active_api`, `expose_to_network`, `proxy_token`) is the JS↔Rust contract.
+    `active_api`, `expose_to_network`, `proxy_token`, `running_agent`) is the
+    JS↔Rust contract. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
+    deliberately **single-slot** registry of the launched agent terminal: it owns
+    the spawned `Child`, and `running_id()` answers from the **live process
+    state** (`try_wait`, reaping the slot once the terminal exits) — every
+    `get_state` poll re-checks reality, so there is no one-shot exit notification
+    to miss and a stale "live" can't outlive the process. A newer launch
+    supersedes the previous entry (the superseded terminal keeps running, just
+    untracked). Windows-only spawn bits (`creation_flags`) stay
+    `#[cfg(windows)]`-gated with a non-Windows counterpart, because CI clippy
+    runs on ubuntu.
   - `main.rs` — Builder, config resolution (`config.json` → `config.toml` seed →
     defaults; loaded values pass through `sanitize_config` — invalid `listen_addr`
     → loopback default, invalid `endpoint_url` → cleared, non-loopback addr without
@@ -92,7 +102,19 @@ Cargo workspace, two members:
     a pre-bound listener.
   - `dist/` — settings **webview** (vanilla JS, no bundler; `withGlobalTauri`).
     `index.html` + `styles.css` (ported 1:1 from the design) + `app.js` (state
-    machine) + `fonts/` (local IBM Plex woff2).
+    machine) + `validation.js` + `fonts/` (local IBM Plex woff2).
+    `validation.js` holds the **pure** helpers (`detectApi`, `endpointError`,
+    `listenAddrError`, …) as a classic script (globals) with a trailing
+    `module.exports` guard, so the same file runs in the webview **and** under
+    `node --test` (`src-tauri/webview-tests/`, outside `dist/` so it doesn't
+    ship). `listenAddrError` mirrors `proxy-core`'s `validate_listen_addr` —
+    keep them in sync; JS validation is pre-flight UX only, the backend
+    re-validates everything. Webview conventions: long-running actions take an
+    in-flight guard (`setRefreshSpinning` / `setEndpointBusy` — flag set before
+    the first `await`, cleared in `finally`, early-return also catches the
+    Enter path); the `loading`/`error` phases are sticky — a **successful
+    action** clears them explicitly, never `adoptState` (the 1.5 s poll would
+    mask fresh errors).
 
 ## Conventions / gotchas
 
@@ -114,12 +136,41 @@ Cargo workspace, two members:
 
 ```bash
 cargo test -p proxy-core        # unit + integration (classification, atomic_io, gateway auth, swap, streaming, endpoint, loopback)
-cargo test -p copilot-proxy     # agent gating, endpoint/listen validation, local_base_url
+cargo test -p copilot-proxy     # agent gating, endpoint/listen validation, local_base_url, agent watch
 cargo check --all-targets
 cargo clippy --all-targets
+node --test "src-tauri/webview-tests/*.test.js"   # webview validation helpers (glob form — pointing at the bare dir fails)
 cargo tauri dev                 # manual — no config needed; first run opens settings
 ```
 
 Config lives in `config.json` next to the exe (written by the settings window);
 `config.toml` is an optional one-time seed. Version is shared via
 `[workspace.package]`; bump it **and** `tauri.conf.json`.
+
+## Release
+
+CI (`.github/workflows/ci.yml`) builds the Windows exe + MSI/NSIS bundles on
+**every** push, but uploads them only as run **artifacts** (Actions → run →
+Artifacts, ~90-day retention). A GitHub **Release** is published *only* by the
+`Attach to GitHub Release` step, which is gated on `refs/tags/v*`. **No tag ⇒ no
+release** — pushing commits or merging a PR never publishes one.
+
+To cut a release:
+
+1. Bump `version` in **both** `Cargo.toml` (`[workspace.package]`) and
+   `src-tauri/tauri.conf.json` — they **must match the tag**. The release assets
+   are named from `tauri.conf.json` (e.g. `Copilot.Proxy_0.3.3_x64-setup.exe`),
+   so a mismatch ships mislabeled installers.
+2. Merge to `main` and let CI go green.
+3. Tag the **`main` tip** (not a feature branch) and push the tag:
+   ```bash
+   git tag -a vX.Y.Z <main-sha> -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+   The pushed tag triggers a fresh CI run; on success the release appears under
+   **Releases** with `copilot-proxy.exe`, `*.msi`, and `*-setup.exe` attached.
+
+Gotchas:
+- Tagging only locally does nothing — the workflow fires on the **pushed** tag.
+- Tag a commit that already lives on `main`, else you publish feature-branch code.
+- Verify with `gh release view vX.Y.Z --json assets` (expect 3 assets).

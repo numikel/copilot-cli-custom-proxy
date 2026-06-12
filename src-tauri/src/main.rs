@@ -223,6 +223,7 @@ fn main() {
     if let Err(e) = tauri::Builder::default()
         .manage(state)
         .manage(ProxyTask::new())
+        .manage(commands::AgentWatch::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::set_api_key,

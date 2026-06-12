@@ -4,6 +4,43 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] — 2026-06-11
+
+### Added
+- **The "live" indicator is now backed by the real agent process** — the app
+  tracks the terminal it launches (Copilot/Codex) and reports it in the polled
+  state, so the settings window shows "live" while that terminal is open and
+  clears within ~1.5 s of closing it. This also works when the agent is started
+  from the **tray** (previously only a launch from the settings window lit the
+  indicator, and it never went out).
+- **Webview unit tests** — the pure validation helpers moved to
+  `dist/validation.js` (shared between the webview and Node) and are covered by
+  `node --test` in `src-tauri/webview-tests/`, wired into CI.
+
+### Fixed
+- **API-key save/forget errors are reported** — a failing `set_api_key` /
+  `forget_api_key` call now surfaces as an error toast and leaves the UI state
+  untouched, instead of pretending the key was saved/forgotten.
+- **Stale error banner clears after a successful endpoint change** — fixing the
+  endpoint no longer leaves the previous fetch error on screen until a manual
+  Retry.
+- **Endpoint apply can no longer double-fire** — while a *Save endpoint* /
+  API-switch request is in flight, the controls are disabled and re-submits
+  (including Enter) are ignored, so two rapid confirmations can't race each
+  other.
+- **Listen-address validation matches the backend** — bracketed IPv6 literals
+  like `[::1]:8080` are no longer falsely rejected, and the port is checked
+  against the real 1–65535 range (`...:0` and `...:70000` now fail fast with
+  the backend's message instead of being sent and bounced).
+- The copy-able PowerShell command block now falls back to the actual default
+  listen address (`127.0.0.1:8080`) instead of a stale port when no address is
+  configured yet.
+
+### Changed
+- All buttons in the settings window declare `type="button"` (no accidental
+  form-submit semantics), and the endpoint / listen-address / API-key / model
+  filter inputs have accessible names (`aria-label`) for screen readers.
+
 ## [0.3.3] — 2026-06-09
 
 ### Fixed
