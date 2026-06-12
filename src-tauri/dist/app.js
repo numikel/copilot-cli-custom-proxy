@@ -216,7 +216,13 @@ function renderModels() {
 }
 
 // ───────────────────────── render: agents + commands ─────────────────────────
+// The running id the agent grid last drew. The 1.5 s poll re-renders the grid
+// only when this goes stale (launch/exit transition) — rebuilding the buttons
+// every tick would steal focus and reset hover/active states for no reason.
+let renderedRunning = null;
+
 function renderAgents() {
+  renderedRunning = ui.running;
   const grid = $("agent-grid");
   $("agent-meta").textContent = `${ui.agents.length} CLI${ui.agents.length === 1 ? "" : "s"}`;
   grid.innerHTML = ui.agents
@@ -351,10 +357,13 @@ function render() {
 }
 
 // Lightweight render for polling: never touches the model rows or key input,
-// so it won't steal focus or reset the user's filter typing.
+// so it won't steal focus or reset the user's filter typing. The agent grid
+// re-renders only when the backend-tracked terminal changed — its "live" badge
+// lives there, and without this the badge would outlive the closed terminal.
 function renderLive() {
   renderPill();
   renderStatus();
+  if (renderedRunning !== ui.running) renderAgents();
   $("model-meta").textContent = `${filteredModels().length}/${ui.models.length}`;
 }
 
