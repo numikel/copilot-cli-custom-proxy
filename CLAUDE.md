@@ -82,14 +82,15 @@ Cargo workspace, two members:
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,
     `active_api`, `expose_to_network`, `proxy_token`, `running_agent`) is the
     JS↔Rust contract. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
-    deliberately **single-slot** registry of the launched agent terminal: `launch`
-    bumps a generation counter, `exited(gen)` clears only its own generation (a
-    stale terminal's exit can't clobber a newer launch); the inner logic is pure
-    and unit-tested. `launch_agent` keeps the spawned `Child` and watches it on
-    `tauri::async_runtime::spawn_blocking` (`Child::wait()` blocks) — closing the
-    terminal window clears `running_agent` within one UI poll. Windows-only spawn
-    bits (`creation_flags`) stay `#[cfg(windows)]`-gated with a non-Windows
-    counterpart, because CI clippy runs on ubuntu.
+    deliberately **single-slot** registry of the launched agent terminal: it owns
+    the spawned `Child`, and `running_id()` answers from the **live process
+    state** (`try_wait`, reaping the slot once the terminal exits) — every
+    `get_state` poll re-checks reality, so there is no one-shot exit notification
+    to miss and a stale "live" can't outlive the process. A newer launch
+    supersedes the previous entry (the superseded terminal keeps running, just
+    untracked). Windows-only spawn bits (`creation_flags`) stay
+    `#[cfg(windows)]`-gated with a non-Windows counterpart, because CI clippy
+    runs on ubuntu.
   - `main.rs` — Builder, config resolution (`config.json` → `config.toml` seed →
     defaults; loaded values pass through `sanitize_config` — invalid `listen_addr`
     → loopback default, invalid `endpoint_url` → cleared, non-loopback addr without

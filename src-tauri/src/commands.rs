@@ -312,51 +312,43 @@ pub(crate) fn agent_supported(state: &AppState, agent: Agent) -> bool {
 /// PowerShell window (started with `-NoExit`), so "running" means "the terminal
 /// we opened is still open" — the agent inside may exit earlier.
 ///
+/// The slot owns the spawned [`std::process::Child`], and [`Self::running_id`]
+/// answers from the **current process state** (`try_wait`) — every poll
+/// re-checks reality instead of relying on a one-shot exit notification that
+/// could be missed, so a stale "live" can never outlive the process.
+///
 /// Single-slot by design: launching again (even the other agent) supersedes the
-/// previous entry, and a generation counter makes sure a *stale* terminal's
-/// exit never clears the newer entry. Trade-off: with two terminals open the
-/// badge follows only the most recent one — best effort, acceptable for a
-/// status pill.
+/// previous entry (the superseded terminal keeps running — it is just no longer
+/// tracked). Trade-off: with two terminals open the badge follows only the most
+/// recent one — best effort, acceptable for a status pill.
 #[derive(Default)]
-pub struct AgentWatch(Mutex<AgentWatchInner>);
+pub struct AgentWatch(Mutex<Option<RunningAgent>>);
 
-#[derive(Default)]
-struct AgentWatchInner {
-    generation: u64,
-    running: Option<Agent>,
-}
-
-impl AgentWatchInner {
-    /// Records a launch and returns its generation token (pure, unit-testable).
-    fn launch(&mut self, agent: Agent) -> u64 {
-        self.generation += 1;
-        self.running = Some(agent);
-        self.generation
-    }
-
-    /// Clears the entry, but only if it still belongs to this launch — a newer
-    /// launch must not be wiped out by an older terminal closing.
-    fn exited(&mut self, generation: u64) {
-        if self.generation == generation {
-            self.running = None;
-        }
-    }
+struct RunningAgent {
+    agent: Agent,
+    child: std::process::Child,
 }
 
 impl AgentWatch {
-    /// Records a launch and returns the generation to pass to [`Self::exited`].
-    pub fn launch(&self, agent: Agent) -> u64 {
-        self.0.lock().unwrap().launch(agent)
+    /// Records a launched terminal, superseding any previous entry.
+    pub fn launch(&self, agent: Agent, child: std::process::Child) {
+        *self.0.lock().unwrap() = Some(RunningAgent { agent, child });
     }
 
-    /// Marks the launch identified by `generation` as exited.
-    pub fn exited(&self, generation: u64) {
-        self.0.lock().unwrap().exited(generation)
-    }
-
-    /// Id of the currently running agent terminal, if any.
+    /// Id of the launched agent whose terminal is still open, if any. Checks
+    /// the real process state and reaps the slot once the terminal has exited
+    /// (an unreadable handle counts as exited).
     pub fn running_id(&self) -> Option<&'static str> {
-        self.0.lock().unwrap().running.map(Agent::id)
+        let mut slot = self.0.lock().unwrap();
+        let mut running = slot.take()?;
+        if matches!(running.child.try_wait(), Ok(None)) {
+            let id = running.agent.id();
+            *slot = Some(running);
+            Some(id)
+        } else {
+            tracing::info!(agent = running.agent.id(), "agent terminal exited");
+            None
+        }
     }
 }
 
@@ -380,27 +372,19 @@ pub fn run_agent(app: AppHandle, agent: String) -> Result<(), String> {
 
 /// Opens a new terminal with the proxy environment set and starts the selected
 /// agent pointed at the proxy. Shared by the tray menu and the settings window.
-/// The spawned terminal is registered in [`AgentWatch`] and watched until it
-/// exits, so the UI's "live" indicator clears itself.
+/// The spawned terminal is registered in [`AgentWatch`]; the UI's "live"
+/// indicator clears itself because every state poll re-checks the process.
 pub fn launch_agent(app: &AppHandle, kind: Agent) -> Result<(), String> {
     let state = app.state::<Arc<AppState>>();
     let base_url = local_base_url(&state.listen_addr());
     let child = spawn_agent(kind, &base_url).map_err(|e| e.to_string())?;
-    watch_agent(app, kind, child);
+    tracing::info!(
+        agent = kind.id(),
+        pid = child.id(),
+        "agent terminal launched"
+    );
+    app.state::<AgentWatch>().launch(kind, child);
     Ok(())
-}
-
-/// Registers a launched terminal and clears the registration once its process
-/// exits. `Child::wait` blocks, so the wait runs on the blocking pool — parking
-/// an async worker thread on it could starve the runtime (which also serves the
-/// proxy).
-fn watch_agent(app: &AppHandle, kind: Agent, mut child: std::process::Child) {
-    let generation = app.state::<AgentWatch>().launch(kind);
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _ = child.wait();
-        app.state::<AgentWatch>().exited(generation);
-    });
 }
 
 /// The base URL a *local* agent should use to reach the proxy. When the proxy
@@ -543,37 +527,97 @@ mod tests {
         assert!(proxy_core::validate_listen_addr("nope").is_err());
     }
 
+    /// A quiet long-running process the watch can track (no console window).
+    #[cfg(target_os = "windows")]
+    fn spawn_sleeper() -> std::process::Child {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "60", "127.0.0.1"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleeper process")
+    }
+
+    #[cfg(target_os = "windows")]
+    fn kill(pid: u32) {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+    }
+
+    /// Polls `running_id` until the exited process is observed (try_wait may
+    /// race the actual process teardown for a moment).
+    #[cfg(target_os = "windows")]
+    fn wait_until_cleared(watch: &AgentWatch) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while watch.running_id().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "agent still reported live 10 s after its process exited"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
-    fn agent_watch_tracks_latest_launch() {
+    fn running_id_clears_once_the_terminal_exits() {
         let watch = AgentWatch::default();
         assert_eq!(watch.running_id(), None);
 
-        let g1 = watch.launch(Agent::Copilot);
+        let child = spawn_sleeper();
+        let pid = child.id();
+        watch.launch(Agent::Copilot, child);
         assert_eq!(watch.running_id(), Some("copilot"));
 
-        // A newer launch supersedes the previous terminal...
-        let g2 = watch.launch(Agent::Codex);
-        assert_eq!(watch.running_id(), Some("codex"));
-
-        // ...so the stale terminal closing must not clear the newer entry.
-        watch.exited(g1);
-        assert_eq!(watch.running_id(), Some("codex"));
-
-        watch.exited(g2);
+        // Simulates the terminal window being closed: the process dies and the
+        // next poll must observe it and clear the badge.
+        kill(pid);
+        wait_until_cleared(&watch);
         assert_eq!(watch.running_id(), None);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn running_id_follows_the_latest_launch() {
+        let watch = AgentWatch::default();
+
+        let first = spawn_sleeper();
+        let first_pid = first.id();
+        watch.launch(Agent::Copilot, first);
+        assert_eq!(watch.running_id(), Some("copilot"));
+
+        // Single-slot: a newer launch supersedes the previous terminal even
+        // though that terminal is still open.
+        let second = spawn_sleeper();
+        let second_pid = second.id();
+        watch.launch(Agent::Codex, second);
+        assert_eq!(watch.running_id(), Some("codex"));
+
+        kill(second_pid);
+        wait_until_cleared(&watch);
+
+        // The superseded terminal was detached, not killed — clean it up.
+        kill(first_pid);
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn state_view_reports_running_agent() {
         let s = state_with_endpoint("");
         let watch = AgentWatch::default();
         assert_eq!(state_view(&s, &watch).running_agent, None);
 
-        watch.launch(Agent::Copilot);
+        let child = spawn_sleeper();
+        let pid = child.id();
+        watch.launch(Agent::Copilot, child);
         assert_eq!(
             state_view(&s, &watch).running_agent.as_deref(),
             Some("copilot")
         );
+        kill(pid);
     }
 
     #[test]
