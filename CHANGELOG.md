@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] — 2026-06-13
+
+### Changed
+- **The tray status line no longer shows an empty "Active model: "** — when the
+  endpoint is configured but no chat model is selected yet, the tray now reads
+  "No model selected — pick one from Models". An endpoint that exposes only
+  non-chat models reads "No models — set API key, then Refresh models", matching
+  what the "Models" submenu can actually offer.
+- Internal: documented in `index.html` that the Content-Security-Policy is owned
+  by `tauri.conf.json` (the canonical Tauri v2 location), to prevent a future
+  duplicate `<meta>` CSP from clashing with Tauri's compile-time nonce injection.
+
 ## [0.3.5] — 2026-06-13
 
 ### Fixed

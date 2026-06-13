@@ -4,6 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Copilot Proxy — Settings</title>
+<!-- Content-Security-Policy lives in tauri.conf.json (app.security.csp) — the
+     canonical Tauri v2 location. Tauri injects per-build nonces/hashes into that
+     policy at compile time, so do NOT add a static <meta> CSP here: a duplicate
+     policy is enforced as an intersection and would strip those nonces, breaking
+     the injected IPC bootstrap. -->
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
