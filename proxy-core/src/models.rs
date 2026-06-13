@@ -19,6 +19,11 @@ pub struct ModelInfo {
 }
 
 /// Non-chat model families, tagged in the UI (`embed`, `image`, …).
+///
+/// Keep the variants in sync with the `MODEL_KINDS` list in
+/// `src-tauri/dist/validation.js` and the `cp-kindtag--*` classes in
+/// `src-tauri/dist/styles.css` — the webview degrades an unknown kind to the
+/// plain base tag, so a drift is cosmetic but still a contract break.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelKind {

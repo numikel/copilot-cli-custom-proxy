@@ -146,7 +146,11 @@ impl AppState {
         *self.config_path.lock().unwrap() = Some(path);
     }
 
-    /// Persists the current runtime config to `config.json` (best-effort).
+    /// Persists the current runtime config to `config.json`. Best-effort: a
+    /// write error is logged and the in-memory state stays authoritative.
+    /// `config_path` is taken and released before `config`, and neither lock is
+    /// held during the disk I/O — concurrent callers race last-writer-wins on
+    /// the file, each writing a self-consistent snapshot.
     fn persist_config(&self) {
         let path = self.config_path.lock().unwrap().clone();
         if let Some(path) = path {
@@ -157,22 +161,12 @@ impl AppState {
         }
     }
 
-    /// Replaces the endpoint URL, persists it, and reloads this endpoint's
-    /// tray-visibility selection. The caller is responsible for clearing /
-    /// refetching the model list (the catalog changes with the endpoint).
-    pub fn set_endpoint(&self, url: String) {
-        self.config.lock().unwrap().endpoint_url = url;
-        self.persist_config();
-        self.reload_visible_for_endpoint();
-    }
-
     /// Atomically swaps the endpoint URL **and** its model catalog in a single
     /// critical section, keeping the current selection when it still exists in
     /// the new catalog. When it does not, the new endpoint's own persisted
     /// selection is restored if present, otherwise the first model (or empty).
-    /// This closes the window the old `set_endpoint` + `set_models([])` sequence
-    /// left open, in which a request could read the new URL paired with an empty
-    /// model.
+    /// This is the only path that changes the endpoint — the atomic swap means
+    /// a request can never read the new URL paired with a stale or empty model.
     ///
     /// The persisted selection is read **before** the critical section (it does
     /// disk I/O and must not run while the state locks are held). Lock order is
@@ -329,7 +323,9 @@ impl AppState {
     /// Keeps the current selection if still present; otherwise restores this
     /// endpoint's persisted choice when it is in the new catalog, falling back
     /// to the first model. This is what re-applies the saved active model after
-    /// a restart (the in-memory selection starts empty).
+    /// a restart (the in-memory selection starts empty). Also re-reads this
+    /// endpoint's persisted tray-visibility curation, so a Refresh picks up
+    /// on-disk changes.
     pub fn set_models(&self, models: Vec<ModelInfo>) {
         let restored = self.persisted_selected(&self.endpoint_key());
         {
@@ -339,6 +335,7 @@ impl AppState {
             }
         }
         *self.models.lock().unwrap() = models;
+        self.reload_visible_for_endpoint();
     }
 
     pub fn selected_model(&self) -> String {
@@ -632,6 +629,28 @@ mod tests {
             vec![classify_model("llama-3"), classify_model("mistral")],
         );
         assert_eq!(state.selected_model(), "llama-3");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_models_reloads_visible_curation_from_disk() {
+        let path = std::env::temp_dir().join("copilot_proxy_set_models_reload_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/chat/completions";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+
+        // A second instance on the same endpoint curates the tray on disk.
+        let writer = chat_state(endpoint);
+        writer.load_ui_state(path.clone());
+        writer.set_visible_models(vec!["claude-3".into()]);
+
+        // Refreshing the catalog re-reads the on-disk curation; without the
+        // reload the first state would still be uncurated and show both models.
+        state.set_models(vec![classify_model("gpt-4o"), classify_model("claude-3")]);
+        assert_eq!(state.visible_model_ids(), vec!["claude-3"]);
 
         let _ = std::fs::remove_file(&path);
     }
