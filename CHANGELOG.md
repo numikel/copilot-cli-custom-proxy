@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] — 2026-06-13
+
+### Fixed
+- **Endpoint URLs without a host are rejected up front** — a URL whose API
+  suffix is all there is (`https://chat/completions`, `https://responses`) or
+  that has no host at all (`https:///responses`) used to pass validation and
+  then produce a broken upstream base URL. The suffix is now matched against the
+  URL's *path*, and a host is required, so these fail in the settings window with
+  a clear message instead of misrouting requests later.
+- **A corrupt `config.json` is preserved before it's reset** — if the file can't
+  be parsed at startup it is copied to `config.json.bak` *before* anything
+  overwrites it, and the settings window shows a one-time notice that the config
+  was reset to defaults. Previously a damaged (or briefly unreadable) config was
+  silently replaced with no way to recover the original.
+- **"Refresh models" keeps your tray-visibility selection** — refreshing the
+  catalog (from the tray or the settings window) now re-applies this endpoint's
+  saved set of tray-visible models, so the "Models" submenu no longer goes empty
+  when the refreshed catalog drops or reorders ids.
+
+### Changed
+- **First run writes a default `config.json` immediately** — the file now exists
+  from the first launch (next to the executable), so there is something to
+  inspect and hand-edit even before you change anything in the settings window.
+- **Unknown model kinds degrade gracefully** — a model whose kind isn't one the
+  UI knows about now gets a neutral tag (and a console warning) instead of an
+  unstyled, nonexistent CSS class.
+- Internal: `main.rs` was split into focused `lifecycle` (proxy task) and
+  `config_resolve` (startup config) modules; the unused non-atomic endpoint-swap
+  path was removed (the atomic swap is the only one); and an internal storage
+  type is no longer part of the core crate's public surface.
+
 ## [0.3.4] — 2026-06-11
 
 ### Added
