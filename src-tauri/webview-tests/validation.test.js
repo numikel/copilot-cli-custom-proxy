@@ -15,6 +15,8 @@ const {
   listenHost,
   isLoopbackListenAddr,
   listenAddrError,
+  MODEL_KINDS,
+  kindTagClass,
 } = require("../dist/validation.js");
 
 test("detectApi recognizes the wire API from the URL suffix", () => {
@@ -92,4 +94,27 @@ test("listenAddrError rejects out-of-range ports (mirrors u16 + nonzero)", () =>
   assert.match(listenAddrError("127.0.0.1:123456"), portErr); // >5 digits
   assert.match(listenAddrError("127.0.0.1:abc"), portErr);
   assert.match(listenAddrError("127.0.0.1:"), portErr); // empty port
+});
+
+test("kindTagClass maps known kinds to their modifier class", () => {
+  for (const kind of MODEL_KINDS) {
+    assert.equal(kindTagClass(kind), `cp-kindtag cp-kindtag--${kind}`);
+  }
+});
+
+test("kindTagClass falls back to the bare tag for unknown kinds", () => {
+  assert.equal(kindTagClass("video"), "cp-kindtag");
+  assert.equal(kindTagClass(null), "cp-kindtag");
+  assert.equal(kindTagClass(undefined), "cp-kindtag");
+  assert.equal(kindTagClass(""), "cp-kindtag");
+});
+
+test("MODEL_KINDS mirrors proxy-core's ModelKind", () => {
+  // If the Rust enum ModelKind gains or loses a variant, update MODEL_KINDS
+  // here, in validation.js, and add/remove the matching cp-kindtag--* rule
+  // in styles.css.
+  assert.deepStrictEqual(
+    [...MODEL_KINDS].sort(),
+    ["audio", "embed", "image", "moderation", "rerank"]
+  );
 });

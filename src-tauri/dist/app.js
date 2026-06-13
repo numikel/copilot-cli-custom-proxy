@@ -191,7 +191,12 @@ function renderModels() {
       const active = m.id === ui.selected;
       const tag =
         !m.chat && m.kind
-          ? `<span class="cp-kindtag cp-kindtag--${esc(m.kind)}">${esc(m.kind)}</span>`
+          ? (() => {
+              if (!MODEL_KINDS.includes(m.kind)) {
+                console.warn(`[copilot-proxy] Unknown model kind "${m.kind}" — update MODEL_KINDS in validation.js`);
+              }
+              return `<span class="${kindTagClass(m.kind)}">${esc(m.kind)}</span>`;
+            })()
           : "";
       // Only chat models can appear in the tray, so only they get a checkbox.
       const visBox = m.chat
@@ -742,6 +747,12 @@ async function init() {
     toast(`Failed to read state: ${e}`, "err");
   }
   render();
+  // One-shot startup warning from the backend (e.g. config migration notice).
+  // Silent catch: command may not be registered yet in dev builds.
+  try {
+    const w = await invoke("get_startup_warning");
+    if (w) toast(w, "err");
+  } catch {}
   startPolling();
 }
 

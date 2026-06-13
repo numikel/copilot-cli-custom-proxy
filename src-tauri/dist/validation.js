@@ -77,6 +77,16 @@ function listenAddrError(addr) {
   return null;
 }
 
+// Known non-chat model kinds — keep in sync with `ModelKind` in
+// proxy-core/src/models.rs and the `cp-kindtag--*` classes in styles.css.
+const MODEL_KINDS = ["embed", "image", "audio", "rerank", "moderation"];
+
+// CSS classes for a model-kind tag; an unknown kind degrades to the bare
+// base tag instead of minting a nonexistent cp-kindtag--… modifier.
+function kindTagClass(kind) {
+  return MODEL_KINDS.includes(kind) ? `cp-kindtag cp-kindtag--${kind}` : "cp-kindtag";
+}
+
 // Node test hook — a no-op in the webview (classic scripts have no `module`).
 if (typeof module !== "undefined") {
   module.exports = {
@@ -87,5 +97,7 @@ if (typeof module !== "undefined") {
     listenHost,
     isLoopbackListenAddr,
     listenAddrError,
+    MODEL_KINDS,
+    kindTagClass,
   };
 }
