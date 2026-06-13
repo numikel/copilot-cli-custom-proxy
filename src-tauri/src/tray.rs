@@ -36,16 +36,28 @@ fn update_tray_icon(app: &AppHandle, active: bool) {
     }
 }
 
-fn status_text(state: &AppState) -> String {
-    if state.active_api().is_none() {
+/// Pure status-line text, factored out so every branch is unit-testable without
+/// constructing an `AppState`. `chat_ids` is the chat-only catalog (what the
+/// "Models" submenu offers); `selected` is the active model id.
+fn status_line(api_configured: bool, chat_ids: &[String], selected: &str) -> String {
+    if !api_configured {
         return "Not configured — open Settings to set the endpoint".to_string();
     }
-    let models = state.models();
-    if models.is_empty() {
-        "No models — set API key, then Refresh models".to_string()
-    } else {
-        format!("Active model: {}", state.selected_model())
+    if chat_ids.is_empty() {
+        return "No models — set API key, then Refresh models".to_string();
     }
+    if selected.is_empty() {
+        return "No model selected — pick one from Models".to_string();
+    }
+    format!("Active model: {selected}")
+}
+
+fn status_text(state: &AppState) -> String {
+    status_line(
+        state.active_api().is_some(),
+        &state.chat_model_ids(),
+        &state.selected_model(),
+    )
 }
 
 /// Builds the tray menu from the current state: status line, model toggles,
@@ -188,4 +200,56 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     update_tray_icon(app.handle(), is_active(&state));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_line;
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn status_unconfigured() {
+        assert_eq!(
+            status_line(false, &[], ""),
+            "Not configured — open Settings to set the endpoint"
+        );
+    }
+
+    /// The unconfigured check wins even if a catalog/selection somehow lingers.
+    #[test]
+    fn status_unconfigured_gates_first() {
+        assert_eq!(
+            status_line(false, &ids(&["gpt"]), "gpt"),
+            "Not configured — open Settings to set the endpoint"
+        );
+    }
+
+    #[test]
+    fn status_no_chat_models() {
+        assert_eq!(
+            status_line(true, &[], ""),
+            "No models — set API key, then Refresh models"
+        );
+    }
+
+    /// Configured with chat models available but none selected — the branch that
+    /// replaces the old empty "Active model: ".
+    #[test]
+    fn status_no_selection() {
+        assert_eq!(
+            status_line(true, &ids(&["gpt-4"]), ""),
+            "No model selected — pick one from Models"
+        );
+    }
+
+    #[test]
+    fn status_active() {
+        assert_eq!(
+            status_line(true, &ids(&["gpt-4"]), "gpt-4"),
+            "Active model: gpt-4"
+        );
+    }
 }
