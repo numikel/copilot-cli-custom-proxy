@@ -225,6 +225,7 @@ html[data-theme="light"] .cp-toggle.is-on .cp-toggle-box{color:#fff}
 .cp-modelrow.is-active .cp-model-id{font-weight:500}
 .cp-kindtag{flex:none;font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.04em;
   text-transform:uppercase;padding:2px 6px;border-radius:5px;background:var(--surface-3);color:var(--text-3)}
+/* model-kind tags — one modifier per ModelKind (proxy-core/src/models.rs); keep in sync with MODEL_KINDS in validation.js (unknown kinds render the bare .cp-kindtag) */
 .cp-kindtag--embed{color:#8aa9ff;background:color-mix(in srgb,#8aa9ff 14%,transparent)}
 .cp-kindtag--image{color:#d08bff;background:color-mix(in srgb,#d08bff 14%,transparent)}
 .cp-kindtag--audio{color:#f0a35a;background:color-mix(in srgb,#f0a35a 14%,transparent)}

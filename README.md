@@ -45,17 +45,21 @@ config.example.toml
 ## Configuration
 
 Everything is configured **in the settings window** — there is nothing to edit by
-hand. On first run (no config yet) the app starts with defaults and opens the
-settings window automatically. Your choices persist to `config.json` next to the
-executable (gitignored, as it holds your private endpoint URL).
+hand. On first run (no config yet) the app starts with defaults, writes a
+`config.json` next to the executable straight away, and opens the settings window
+automatically. Your choices persist to that same `config.json` (gitignored, as it
+holds your private endpoint URL). If the file is ever found corrupt at startup it
+is copied to `config.json.bak` before being reset to defaults, and the settings
+window shows a one-time notice so the reset isn't silent.
 
 In the **Endpoint** section you set:
 
-- **Endpoint URL** — the *full* upstream URL, including the API suffix, e.g.
-  `https://openrouter.ai/api/v1/chat/completions` or
+- **Endpoint URL** — the *full* upstream URL, including a host and the API
+  suffix, e.g. `https://openrouter.ai/api/v1/chat/completions` or
   `https://openrouter.ai/api/v1/responses`. **Do not stop at `/v1`** — the URL
-  suffix is what tells the proxy whether this is a Chat Completions or a Responses
-  endpoint.
+  suffix (matched against the URL's path, so it must be the trailing path
+  segment, not part of the host) is what tells the proxy whether this is a Chat
+  Completions or a Responses endpoint.
 - **Chat completions ⟷ Responses switch** — one API is active at a time. Flipping
   the switch rewrites the URL suffix; the active API decides which CLI agent you
   can launch (Copilot for chat, Codex for responses).

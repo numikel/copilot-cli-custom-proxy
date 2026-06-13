@@ -54,6 +54,16 @@ pub fn get_state(state: State<'_, Arc<AppState>>, watch: State<'_, AgentWatch>) 
     state_view(&state, &watch)
 }
 
+/// One-shot startup warning resolved at boot (e.g. "config.json was corrupt and
+/// has been reset"), kept in Tauri-managed state so the settings webview can
+/// surface it once on load.
+pub struct StartupNotice(pub Option<String>);
+
+#[tauri::command]
+pub fn get_startup_warning(notice: State<'_, StartupNotice>) -> Option<String> {
+    notice.0.clone()
+}
+
 /// Sets the upstream endpoint URL (must end in /chat/completions or /responses)
 /// and refreshes the model catalog. To avoid a window where the new URL is
 /// paired with a stale/empty catalog (which would forward `"model": ""`), the
@@ -136,7 +146,7 @@ pub async fn set_listen_addr(app: AppHandle, addr: String) -> Result<StateView, 
         .map_err(|e| format!("cannot configure proxy socket {addr}: {e}"))?;
 
     state.set_listen_addr(addr);
-    let task = app.state::<crate::ProxyTask>();
+    let task = app.state::<crate::lifecycle::ProxyTask>();
     task.stop().await;
     task.spawn(listener, state.clone());
 

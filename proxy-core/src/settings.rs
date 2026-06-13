@@ -6,7 +6,9 @@
 //! The endpoint is stored as a **full URL including the API suffix**
 //! (e.g. `https://openrouter.ai/api/v1/responses`). The wire API is derived
 //! from that suffix, so the URL must NOT stop at `/v1` — otherwise chat and
-//! responses are indistinguishable.
+//! responses are indistinguishable. The suffix must form the final segments of
+//! the URL's *path* — a host that merely looks like one (`https://responses`)
+//! does not count — and the URL must contain a host.
 //!
 //! The API key is NOT stored here — it stays in memory only ([`crate::AppState`]).
 
@@ -98,6 +100,10 @@ impl RuntimeConfig {
     /// The endpoint base — the URL minus the known API suffix and any trailing
     /// slash — ready for `/models` or a request path to be appended. `None`
     /// when the URL is empty or its suffix is unrecognized.
+    ///
+    /// Assumes `endpoint_url` has passed [`validate_endpoint_url`] (every write
+    /// path validates, and the app's `sanitize_config` clears an invalid URL on
+    /// load) — the method itself stays liberal and just strips the suffix.
     pub fn base_url(&self) -> Option<String> {
         let trimmed = self.endpoint_url.trim_end_matches('/');
         let api = self.active_api()?;
@@ -149,18 +155,27 @@ impl RuntimeConfig {
     }
 }
 
-/// Validates a candidate endpoint URL: it must be http(s) and end in a known
-/// API suffix so the wire API can be derived. Returns the detected API.
+/// Validates a candidate endpoint URL: it must be http(s), contain a host, and
+/// its *path* must end in a known API suffix so the wire API can be derived —
+/// a host that merely looks like a suffix does not count. Returns the
+/// detected API.
 pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
     let trimmed = url.trim();
     let rest = trimmed
         .strip_prefix("http://")
         .or_else(|| trimmed.strip_prefix("https://"))
         .ok_or("Endpoint URL must start with http:// or https://")?;
+    // The authority is everything up to the first path/query/fragment delimiter.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return Err(
+            "Endpoint URL must contain a host (e.g. https://api.example.com/v1/responses)"
+                .to_string(),
+        );
+    }
     // Reject credentials embedded in the authority (`user:pass@host`). Splitting
     // on the first path/query/fragment delimiter keeps any later `@` (e.g. in a
     // query string) from triggering a false positive.
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.contains('@') {
         return Err(
             "Endpoint URL must not contain credentials (user:pass@host) — \
@@ -168,11 +183,13 @@ pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
                 .to_string(),
         );
     }
-    let stripped = trimmed.trim_end_matches('/');
+    // Match the suffix against the path only, so it cannot be satisfied by the
+    // host (e.g. `https://chat/completions`, whose path is just `/completions`).
+    let path = rest[authority.len()..].trim_end_matches('/');
     ApiKind::ALL
         .iter()
         .copied()
-        .find(|api| stripped.ends_with(api.suffix()))
+        .find(|api| path.ends_with(api.suffix()))
         .ok_or_else(|| {
             "Endpoint URL must end with /chat/completions or /responses \
              (do not stop at /v1, or the API type is ambiguous)"
@@ -323,6 +340,32 @@ mod tests {
             validate_endpoint_url("http://localhost:1234/v1/chat/completions").unwrap(),
             ApiKind::Chat
         );
+        // The suffix may be the entire path (base = the bare authority).
+        assert_eq!(
+            validate_endpoint_url("https://h/responses").unwrap(),
+            ApiKind::Responses
+        );
+    }
+
+    #[test]
+    fn validate_endpoint_rejects_empty_host() {
+        assert!(validate_endpoint_url("https:///chat/completions").is_err());
+        assert!(validate_endpoint_url("http:///responses").is_err());
+        let err = validate_endpoint_url("https:///chat/completions").unwrap_err();
+        assert!(err.contains("host"));
+    }
+
+    #[test]
+    fn validate_endpoint_rejects_suffix_inside_host() {
+        // The suffix must live in the path: `https://chat/completions` has host
+        // "chat" and path "/completions"; `https://responses` has no path at all.
+        assert!(validate_endpoint_url("https://chat/completions").is_err());
+        assert!(validate_endpoint_url("https://responses").is_err());
+        // ...while the same segments after a real host validate fine.
+        assert_eq!(
+            validate_endpoint_url("https://h/chat/completions").unwrap(),
+            ApiKind::Chat
+        );
     }
 
     #[test]
@@ -371,7 +414,7 @@ mod tests {
     #[test]
     fn validate_listen_addr_rejects_shell_metachars() {
         // The host feeds the launched CLI's command line — reject anything that
-        // could break out of it (this is the SEC-001 regression guard).
+        // could break out of it (command-injection regression guard).
         assert!(validate_listen_addr("127.0.0.1;calc:8080").is_err());
         assert!(validate_listen_addr("127.0.0.1`whoami`:8080").is_err());
         assert!(validate_listen_addr("$(rm -rf /):8080").is_err());

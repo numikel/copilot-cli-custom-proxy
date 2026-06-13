@@ -14,8 +14,11 @@ Cargo workspace, two members:
     truth). The active model is **not** stored here — it is remembered
     per-endpoint in `ui_state.json` (see `ui_state.rs`). `ApiKind { Chat, Responses }` is **derived from the endpoint URL
     suffix** (`/chat/completions` | `/responses`); `base_url()`/`models_url()`
-    strip it. `validate_endpoint_url` (rejects URLs that stop at `/v1` **and**
-    URLs with `user:pass@` credentials), `validate_listen_addr` (strict host
+    strip it. `validate_endpoint_url` (requires a host, matches the API suffix
+    against the URL **path** — so a suffix-looking host like `https://responses`
+    is rejected — and rejects URLs that stop at `/v1` **and** URLs with
+    `user:pass@` credentials; `base_url()` assumes the URL passed this),
+    `validate_listen_addr` (strict host
     whitelist — RFC 1123 chars or bracketed IPv6 — so the address is safe to
     interpolate into a launched CLI command; port 1–65535).
     `is_loopback_listen_addr` (network-exposure gate) and `generate_proxy_token`
@@ -27,18 +30,24 @@ Cargo workspace, two members:
     `RequestLog`, `ui_io: Mutex<()>` (serializes the `ui_state.json`
     read-modify-write). Accessors: `endpoint_url()`, `base_url()`, `models_url()`,
     `active_api()`, `listen_addr()`, `expose_to_network()`, `proxy_token()`,
-    `set_endpoint()`, `set_listen_addr()`, `set_expose_to_network()` (mints a
+    `set_listen_addr()`, `set_expose_to_network()` (mints a
     token on first enable), `regenerate_proxy_token()`, `swap_endpoint()` (atomic
     URL + catalog swap; keeps the selection if it survives, else restores the new
-    endpoint's persisted choice, else first — closes the empty-`model` race),
-    `models()`, `chat_model_ids()`, `set_models()` (re-applies the persisted
-    per-endpoint selection when the in-memory one is empty/stale — this is how the
-    active model survives a restart), `set_selected_model()` (persists the choice
-    per-endpoint to `ui_state.json`). Persists config on mutation.
+    endpoint's persisted choice, else first — closes the empty-`model` race; it
+    is the **only** path that changes the endpoint), `models()`,
+    `chat_model_ids()`, `set_models()` (re-applies the persisted per-endpoint
+    selection when the in-memory one is empty/stale — this is how the active
+    model survives a restart — **and** re-reads this endpoint's tray-visibility
+    curation, so a tray/settings "Refresh" picks up on-disk changes),
+    `set_selected_model()` (persists the choice per-endpoint to `ui_state.json`).
+    Persists config on mutation (`persist_config` is best-effort /
+    last-writer-wins; the in-memory state stays authoritative).
   - `models.rs` — `ModelInfo { id, chat, kind }`, `ModelKind`, and
     `classify_model(id)` (pure, id-heuristic, unit-tested; matches on **word
     tokens**, not raw substrings, so e.g. `watts-3b`/`vanguard-instruct` stay
-    chat).
+    chat). `ModelKind` variants are a three-way sync point: each must have a
+    `cp-kindtag--*` class in `dist/styles.css` and an entry in `MODEL_KINDS`
+    (`dist/validation.js`); the webview degrades an unknown kind to the bare tag.
   - `atomic_io.rs` — `write_atomic(path, bytes)` (crate-internal): temp-write +
     `fsync` + `rename`, so an interrupted save can't truncate `config.json` /
     `ui_state.json`. Used by both `save()` methods.
@@ -81,7 +90,9 @@ Cargo workspace, two members:
     agents (loopback peer ⇒ no token needed). `Agent` enum + `agent_supported()`
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,
     `active_api`, `expose_to_network`, `proxy_token`, `running_agent`) is the
-    JS↔Rust contract. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
+    JS↔Rust contract. `get_startup_warning` returns the one-shot `StartupNotice`
+    (managed in `main.rs` from `ResolvedConfig::startup_warning`) so the webview
+    can toast a config-reset notice once on load. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
     deliberately **single-slot** registry of the launched agent terminal: it owns
     the spawned `Child`, and `running_id()` answers from the **live process
     state** (`try_wait`, reaping the slot once the terminal exits) — every
@@ -91,25 +102,36 @@ Cargo workspace, two members:
     untracked). Windows-only spawn bits (`creation_flags`) stay
     `#[cfg(windows)]`-gated with a non-Windows counterpart, because CI clippy
     runs on ubuntu.
-  - `main.rs` — Builder, config resolution (`config.json` → `config.toml` seed →
-    defaults; loaded values pass through `sanitize_config` — invalid `listen_addr`
-    → loopback default, invalid `endpoint_url` → cleared, non-loopback addr without
-    `expose_to_network` → loopback default, exposed-but-tokenless → token minted),
-    background proxy lifecycle via `ProxyTask { handle, shutdown }`
-    (`spawn(listener, state)` / async `stop()` — graceful shutdown waits for the
-    port to be released before a restart binds), opens settings on first run,
-    CloseRequested → hide to tray. The proxy runs via `proxy_core::serve_with` on
-    a pre-bound listener.
+  - `main.rs` — thin composer: declares the modules, builds the Tauri app, binds
+    the listener synchronously (so a bind error is a startup error), `.manage`s
+    state + `ProxyTask` + `AgentWatch` + `StartupNotice`, opens settings on first
+    run, CloseRequested → hide to tray.
+  - `lifecycle.rs` — `ProxyTask { handle, shutdown }` (`spawn(listener, state)` /
+    async `stop()` — graceful shutdown waits for the port to be released before a
+    restart binds). The proxy runs via `proxy_core::serve_with` on a pre-bound
+    listener.
+  - `config_resolve.rs` — startup config resolution (`config.json` → `config.toml`
+    seed → defaults), split into `resolve_config()` and a testable
+    `resolve_config_in(dirs)`. Loaded values pass through `sanitize_config`
+    **in memory only** (the on-disk file stays the source of truth) — invalid
+    `listen_addr` → loopback default, invalid `endpoint_url` → cleared,
+    non-loopback addr without `expose_to_network` → loopback default,
+    exposed-but-tokenless → token minted. A corrupt `config.json` is copied to
+    `config.json.bak` **before** anything overwrites it; first-run (no usable
+    config) seeds a default `config.json` immediately (both best-effort). Returns
+    `ResolvedConfig { config, dir, needs_setup, startup_warning }`; the warning
+    is surfaced once via the `get_startup_warning` command + a webview toast.
   - `dist/` — settings **webview** (vanilla JS, no bundler; `withGlobalTauri`).
     `index.html` + `styles.css` (ported 1:1 from the design) + `app.js` (state
     machine) + `validation.js` + `fonts/` (local IBM Plex woff2).
     `validation.js` holds the **pure** helpers (`detectApi`, `endpointError`,
-    `listenAddrError`, …) as a classic script (globals) with a trailing
-    `module.exports` guard, so the same file runs in the webview **and** under
-    `node --test` (`src-tauri/webview-tests/`, outside `dist/` so it doesn't
-    ship). `listenAddrError` mirrors `proxy-core`'s `validate_listen_addr` —
-    keep them in sync; JS validation is pre-flight UX only, the backend
-    re-validates everything. Webview conventions: long-running actions take an
+    `listenAddrError`, `kindTagClass`/`MODEL_KINDS`, …) as a classic script
+    (globals) with a trailing `module.exports` guard, so the same file runs in
+    the webview **and** under `node --test` (`src-tauri/webview-tests/`, outside
+    `dist/` so it doesn't ship). `listenAddrError` mirrors `proxy-core`'s
+    `validate_listen_addr`, and `MODEL_KINDS` mirrors `ModelKind` — keep them in
+    sync (a `node --test` guards the latter); JS validation is pre-flight UX
+    only, the backend re-validates everything. Webview conventions: long-running actions take an
     in-flight guard (`setRefreshSpinning` / `setEndpointBusy` — flag set before
     the first `await`, cleared in `finally`, early-return also catches the
     Enter path); the `loading`/`error` phases are sticky — a **successful
