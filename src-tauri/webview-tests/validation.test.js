@@ -15,6 +15,7 @@ const {
   listenHost,
   isLoopbackListenAddr,
   listenAddrError,
+  tokenLimitError,
   MODEL_KINDS,
   kindTagClass,
 } = require("../dist/validation.js");
@@ -107,6 +108,25 @@ test("kindTagClass falls back to the bare tag for unknown kinds", () => {
   assert.equal(kindTagClass(null), "cp-kindtag");
   assert.equal(kindTagClass(undefined), "cp-kindtag");
   assert.equal(kindTagClass(""), "cp-kindtag");
+});
+
+test("tokenLimitError accepts blank (no override) and positive integers", () => {
+  // Blank / nullish → no override, which is valid.
+  assert.equal(tokenLimitError(""), null);
+  assert.equal(tokenLimitError("   "), null);
+  assert.equal(tokenLimitError(null), null);
+  assert.equal(tokenLimitError(undefined), null);
+  // Valid positive integers (string or number).
+  assert.equal(tokenLimitError("128000"), null);
+  assert.equal(tokenLimitError(16384), null);
+});
+
+test("tokenLimitError rejects non-integers and out-of-range values", () => {
+  assert.match(tokenLimitError("12.5"), /whole numbers/);
+  assert.match(tokenLimitError("-5"), /whole numbers/); // the minus is non-digit
+  assert.match(tokenLimitError("abc"), /whole numbers/);
+  assert.match(tokenLimitError("0"), /between 1 and 4000000/);
+  assert.match(tokenLimitError("5000000"), /between 1 and 4000000/);
 });
 
 test("MODEL_KINDS mirrors proxy-core's ModelKind", () => {

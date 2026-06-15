@@ -179,6 +179,19 @@
       <span class="cp-sec-meta" id="agent-meta">0 CLIs</span>
     </div>
     <div class="cp-agentgrid" id="agent-grid"><!-- populated by app.js --></div>
+    <div class="cp-toklimits" id="tok-limits" hidden>
+      <label class="cp-tokfield">
+        <span class="cp-toklbl">max prompt tokens</span>
+        <input class="cp-input" id="tok-prompt" type="number" min="1" step="1" inputmode="numeric" placeholder="auto" aria-label="Copilot max prompt tokens" autocomplete="off" />
+      </label>
+      <label class="cp-tokfield">
+        <span class="cp-toklbl">max output tokens</span>
+        <input class="cp-input" id="tok-output" type="number" min="1" step="1" inputmode="numeric" placeholder="auto" aria-label="Copilot max output tokens" autocomplete="off" />
+      </label>
+    </div>
+    <div class="cp-key-foot" id="tok-foot" hidden>
+      <span class="cp-key-note" id="tok-note">Copilot token budget — auto-detected from the model; set a value only to override.</span>
+    </div>
     <div class="cp-cmdhead">
       <span class="cp-cmdlabel">PowerShell — run manually</span>
       <button type="button" class="cp-iconbtn cp-iconbtn--wide cp-btn--sm" id="copy-cmd"><svg width="13" height="13"><use href="#i-copy"/></svg> copy</button>

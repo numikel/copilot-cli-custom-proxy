@@ -77,6 +77,19 @@ function listenAddrError(addr) {
   return null;
 }
 
+// Validates an optional positive-integer token limit (Copilot max prompt /
+// output). Empty = "no override" (valid → falls back to the model's advertised
+// limit). Pre-flight UX only; the backend re-parses to u32 and stays the source
+// of truth. Returns an error string, or null when valid.
+function tokenLimitError(value) {
+  const v = String(value == null ? "" : value).trim();
+  if (v === "") return null;
+  if (!/^\d+$/.test(v)) return "Token limits must be whole numbers.";
+  const n = Number(v);
+  if (n < 1 || n > 4000000) return "Token limits must be between 1 and 4000000.";
+  return null;
+}
+
 // Known non-chat model kinds — keep in sync with `ModelKind` in
 // proxy-core/src/models.rs and the `cp-kindtag--*` classes in styles.css.
 const MODEL_KINDS = ["embed", "image", "audio", "rerank", "moderation"];
@@ -97,6 +110,7 @@ if (typeof module !== "undefined") {
     listenHost,
     isLoopbackListenAddr,
     listenAddrError,
+    tokenLimitError,
     MODEL_KINDS,
     kindTagClass,
   };

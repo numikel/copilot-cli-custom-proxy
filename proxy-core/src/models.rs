@@ -16,6 +16,13 @@ pub struct ModelInfo {
     pub chat: bool,
     /// The non-chat family, when this is not a chat model.
     pub kind: Option<ModelKind>,
+    /// Max prompt/context tokens advertised by the upstream `/models` entry, when
+    /// present — used to fill Copilot's `COPILOT_PROVIDER_MAX_PROMPT_TOKENS` so it
+    /// stops falling back to catalog defaults. Best-effort: many endpoints omit it
+    /// (plain OpenAI `/models` reports none), in which case it stays `None`.
+    pub max_prompt_tokens: Option<u32>,
+    /// Max output/completion tokens advertised by the upstream, when present.
+    pub max_output_tokens: Option<u32>,
 }
 
 /// Non-chat model families, tagged in the UI (`embed`, `image`, …).
@@ -60,6 +67,10 @@ pub fn classify_model(id: &str) -> ModelInfo {
         id: id.to_string(),
         chat: kind.is_none(),
         kind,
+        // Token limits are not derivable from the id; populated separately from
+        // the upstream `/models` payload (see proxy::extract_token_limits).
+        max_prompt_tokens: None,
+        max_output_tokens: None,
     }
 }
 

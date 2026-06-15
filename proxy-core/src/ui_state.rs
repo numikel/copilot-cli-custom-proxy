@@ -11,6 +11,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// A manual per-endpoint override of the Copilot launch token budget
+/// (`COPILOT_PROVIDER_MAX_PROMPT_TOKENS` / `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS`).
+/// Either field may be absent, in which case the selected model's advertised
+/// limit (or Copilot's own default) is used instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u32>,
+}
+
 /// The persisted UI state file (`ui_state.json`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UiStateFile {
@@ -22,6 +34,10 @@ pub struct UiStateFile {
     /// "no choice saved yet" → the first available model is used.
     #[serde(default)]
     pub selected_models: HashMap<String, String>,
+    /// endpoint url → manual token-limit override for the Copilot launch. A
+    /// missing entry means "no override" → the model's advertised limits are used.
+    #[serde(default)]
+    pub token_overrides: HashMap<String, TokenOverride>,
 }
 
 impl UiStateFile {
@@ -122,6 +138,32 @@ mod tests {
         assert_eq!(
             loaded.selected_models.get("https://b.example/v1").unwrap(),
             "x"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn roundtrips_token_overrides_per_endpoint() {
+        let path = std::env::temp_dir().join("copilot_proxy_uistate_tokens_test.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut file = UiStateFile::default();
+        file.token_overrides.insert(
+            "https://a.example/v1".into(),
+            TokenOverride {
+                prompt: Some(128000),
+                output: Some(16384),
+            },
+        );
+        file.save(&path).unwrap();
+
+        let loaded = UiStateFile::load(&path);
+        assert_eq!(
+            loaded.token_overrides.get("https://a.example/v1").copied(),
+            Some(TokenOverride {
+                prompt: Some(128000),
+                output: Some(16384),
+            })
         );
         let _ = std::fs::remove_file(&path);
     }

@@ -14,7 +14,7 @@ const ui = {
   phase: "no-endpoint", // no-endpoint | no-key | loading | ready | error
   errorMsg: "",
   hasApiKey: false,
-  models: [], // [{id, chat, kind}]
+  models: [], // [{id, chat, kind, max_prompt_tokens, max_output_tokens}]
   selected: "",
   listenAddr: "",
   exposeToNetwork: false, // allow binding beyond loopback (gated by a token)
@@ -25,6 +25,8 @@ const ui = {
   agents: [], // [{id,label,api,enabled}]
   running: null, // agent id currently launched from here
   manualCommand: "", // backend-rendered "run manually" snippet for the active agent
+  tokenPromptOverride: null, // manual Copilot max-prompt-tokens override (null = auto)
+  tokenOutputOverride: null, // manual Copilot max-output-tokens override (null = auto)
   filter: "",
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
@@ -77,6 +79,10 @@ function adoptState(s) {
   // the webview never re-derives the env-var / flag wiring; a successful
   // endpoint/listen change re-renders it via render().
   ui.manualCommand = s.manual_command || "";
+  // Manual per-endpoint token-limit override (null = use the model's advertised
+  // limit, which the inputs show as a placeholder read from `models`).
+  ui.tokenPromptOverride = s.token_prompt_override ?? null;
+  ui.tokenOutputOverride = s.token_output_override ?? null;
 }
 
 async function loadState() {
@@ -260,6 +266,7 @@ function renderAgents() {
     btn.onclick = () => runAgent(btn.dataset.id);
   });
   renderCommands();
+  renderTokenLimits();
 }
 
 function commandText() {
@@ -270,6 +277,25 @@ function commandText() {
 
 function renderCommands() {
   $("cmd-block").textContent = commandText();
+}
+
+// Copilot token-budget inputs: shown only for a chat (Copilot) endpoint, since
+// COPILOT_PROVIDER_MAX_* don't apply to Codex. Each field holds the manual
+// override; its placeholder shows the value auto-detected from the selected
+// model (or "auto" when the upstream didn't advertise one).
+function renderTokenLimits() {
+  const shown = ui.activeApi === "chat";
+  $("tok-limits").hidden = !shown;
+  $("tok-foot").hidden = !shown;
+  if (!shown) return;
+  const model = ui.models.find((m) => m.id === ui.selected);
+  const fill = (el, override, auto) => {
+    if (document.activeElement === el) return; // don't fight the user's typing
+    el.value = override != null ? String(override) : "";
+    el.placeholder = auto ? String(auto) : "auto";
+  };
+  fill($("tok-prompt"), ui.tokenPromptOverride, model && model.max_prompt_tokens);
+  fill($("tok-output"), ui.tokenOutputOverride, model && model.max_output_tokens);
 }
 
 // ───────────────────────── render: status grid ─────────────────────────
@@ -602,11 +628,32 @@ function setRefreshSpinning(on) {
 
 async function pickModel(id) {
   try {
-    await invoke("set_model", { model: id });
-    ui.selected = id;
+    // set_model returns the refreshed state so the snippet's token budget and
+    // the override placeholders track the newly selected model.
+    adoptState(await invoke("set_model", { model: id }));
     renderModels();
     renderStatus();
+    renderCommands();
+    renderTokenLimits();
     toast(`Active model: ${shortId(id)}`);
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
+// Saves (or clears) the manual Copilot token-limit override for this endpoint.
+async function applyTokenLimits() {
+  const pEl = $("tok-prompt");
+  const oEl = $("tok-output");
+  const err = tokenLimitError(pEl.value) || tokenLimitError(oEl.value);
+  if (err) {
+    toast(err, "err");
+    return;
+  }
+  const num = (el) => (el.value.trim() === "" ? null : Number(el.value.trim()));
+  try {
+    adoptState(await invoke("set_token_limits", { prompt: num(pEl), output: num(oEl) }));
+    render();
   } catch (e) {
     toast(String(e), "err");
   }
@@ -711,6 +758,12 @@ function bind() {
   $("forget-key-btn").onclick = forgetKey;
   $("refresh-btn").onclick = () => doRefresh(false);
   $("copy-cmd").onclick = copyCommands;
+  ["tok-prompt", "tok-output"].forEach((id) => {
+    $(id).addEventListener("change", applyTokenLimits);
+    $(id).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") applyTokenLimits();
+    });
+  });
   $("vis-all").onclick = selectAllVisible;
   $("vis-none").onclick = selectNoneVisible;
 

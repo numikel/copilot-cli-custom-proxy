@@ -49,6 +49,7 @@ fn main() {
             commands::set_api_key,
             commands::forget_api_key,
             commands::set_model,
+            commands::set_token_limits,
             commands::run_agent,
             commands::list_agents,
             commands::refresh_models,
