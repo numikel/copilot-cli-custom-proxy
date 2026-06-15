@@ -808,8 +808,12 @@ mod tests {
     #[test]
     fn manual_command_uses_loopback_rewrite_for_wildcard_bind() {
         // The snippet must carry a reachable address, not the wildcard bind.
-        let cmd =
-            manual_command(Agent::Copilot, &local_base_url("0.0.0.0:8080"), (None, None)).unwrap();
+        let cmd = manual_command(
+            Agent::Copilot,
+            &local_base_url("0.0.0.0:8080"),
+            (None, None),
+        )
+        .unwrap();
         assert!(cmd.contains("http://127.0.0.1:8080"));
     }
 

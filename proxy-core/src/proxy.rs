@@ -182,16 +182,15 @@ fn extract_token_limits(model: &serde_json::Value) -> (Option<u32>, Option<u32>)
         "context_window",
         "max_model_len",
     ]);
-    let output = first_u32(&["max_output_tokens", "max_completion_tokens", "max_tokens"]).or_else(
-        || {
+    let output =
+        first_u32(&["max_output_tokens", "max_completion_tokens", "max_tokens"]).or_else(|| {
             // OpenRouter nests the completion cap under `top_provider`.
             model
                 .get("top_provider")
                 .and_then(|t| t.get("max_completion_tokens"))
                 .and_then(|v| v.as_u64())
                 .and_then(|n| u32::try_from(n).ok())
-        },
-    );
+        });
     (prompt, output)
 }
 
