@@ -24,6 +24,7 @@ const ui = {
   requestLog: { count: 0, last_model: "", last_path: "", last_target: "", last_status: null },
   agents: [], // [{id,label,api,enabled}]
   running: null, // agent id currently launched from here
+  manualCommand: "", // backend-rendered "run manually" snippet for the active agent
   filter: "",
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
@@ -72,6 +73,10 @@ function adoptState(s) {
   // Backend-tracked launched-agent terminal — the poll makes this the source of
   // truth for the "live" badge (covers launches from the tray too).
   ui.running = s.running_agent || null;
+  // Backend renders the exact "run manually" command for the active agent, so
+  // the webview never re-derives the env-var / flag wiring; a successful
+  // endpoint/listen change re-renders it via render().
+  ui.manualCommand = s.manual_command || "";
 }
 
 async function loadState() {
@@ -258,15 +263,9 @@ function renderAgents() {
 }
 
 function commandText() {
-  // Fallback only renders before the first loadState — keep it equal to the
-  // backend's DEFAULT_LISTEN_ADDR so a copied command never targets a port the
-  // proxy doesn't listen on.
-  const listen = ui.listenAddr || "127.0.0.1:8080";
-  const supported = ui.agents.filter((a) => a.enabled).map((a) => a.id);
-  const first = supported[0] || "copilot";
-  const others = supported.slice(1);
-  const runLine = others.length ? `${first}        # or: ${others.join(", ")}` : first;
-  return `$env:OPENAI_BASE_URL = "http://${listen}/v1"\n$env:OPENAI_API_KEY  = "proxy-managed"\n${runLine}`;
+  // The backend renders the exact snippet (correct per active agent, with the
+  // reachable base URL — and token limits — baked in); the webview only shows it.
+  return ui.manualCommand || "—";
 }
 
 function renderCommands() {

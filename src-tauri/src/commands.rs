@@ -30,22 +30,36 @@ pub struct StateView {
     /// Id of the most recently launched agent whose terminal is still open
     /// (see [`AgentWatch`]), or `None` when no launched terminal is running.
     pub running_agent: Option<String>,
+    /// Ready-to-paste PowerShell snippet that launches the agent the active
+    /// endpoint can serve (Copilot for chat, Codex for responses), rendered by
+    /// the backend so the webview never re-derives the env-var / flag wiring.
+    pub manual_command: String,
 }
 
 /// Builds the JS-facing view from current state.
 fn state_view(state: &AppState, watch: &AgentWatch) -> StateView {
+    let listen_addr = state.listen_addr();
+    let active_api = state.active_api().map(|a| a.as_str().to_string());
+    // Render the "run manually" snippet for the agent the active endpoint serves,
+    // pointed at the address a local client actually reaches.
+    let manual_command = manual_command(
+        snippet_agent(active_api.as_deref()),
+        &local_base_url(&listen_addr),
+    )
+    .unwrap_or_default();
     StateView {
         models: state.models(),
         selected_model: state.selected_model(),
         has_api_key: state.has_api_key(),
-        listen_addr: state.listen_addr(),
+        listen_addr,
         endpoint_url: state.endpoint_url(),
-        active_api: state.active_api().map(|a| a.as_str().to_string()),
+        active_api,
         visible_models: state.visible_model_ids(),
         expose_to_network: state.expose_to_network(),
         proxy_token: state.proxy_token(),
         request_log: state.request_log(),
         running_agent: watch.running_id().map(String::from),
+        manual_command,
     }
 }
 
@@ -237,9 +251,16 @@ pub fn set_model(app: AppHandle, model: String) -> Result<(), String> {
 /// The model identifier passed to the launched CLI. Its value is arbitrary —
 /// the proxy rewrites the `model` field on every request — so we use a friendly
 /// label that makes it obvious traffic flows through this switcher.
-/// Only read by the Windows launcher; harmless elsewhere.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// Placeholder model id handed to the agent CLIs. Arbitrary — the proxy rewrites
+/// the `model` field to the actually-selected upstream model. Read by both the
+/// Windows launcher and the cross-platform snippet renderer.
 const PROXY_MODEL_LABEL: &str = "copilot-proxy-model";
+
+// Environment variables the GitHub Copilot CLI reads its BYOK provider config
+// from. Shared by the Windows launcher (`spawn_agent`) and the snippet renderer
+// (`manual_command`) so the displayed command can never drift from the launch.
+const COPILOT_BASE_URL_ENV: &str = "COPILOT_PROVIDER_BASE_URL";
+const COPILOT_MODEL_ENV: &str = "COPILOT_MODEL";
 
 /// CLI agents the launcher knows how to start against the proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,8 +458,8 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<std::process::Chi
             // Copilot reads the endpoint and model straight from the environment.
             command
                 .args(["-NoExit", "-Command", "copilot"])
-                .env("COPILOT_PROVIDER_BASE_URL", base_url)
-                .env("COPILOT_MODEL", PROXY_MODEL_LABEL);
+                .env(COPILOT_BASE_URL_ENV, base_url)
+                .env(COPILOT_MODEL_ENV, PROXY_MODEL_LABEL);
         }
         Agent::Codex => {
             // Codex only speaks the Responses API (the "chat" wire API was
@@ -449,7 +470,7 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<std::process::Chi
             // because the proxy injects the real key from memory.
             command
                 .args(["-NoExit", "-Command", &codex_command(base_url)?])
-                .env(CODEX_KEY_ENV, "proxy-managed");
+                .env(CODEX_KEY_ENV, CODEX_KEY_VALUE);
         }
     }
 
@@ -463,7 +484,6 @@ fn spawn_agent(kind: Agent, base_url: &str) -> std::io::Result<std::process::Chi
 /// `validate_listen_addr` host whitelist. A single quote in `base_url` would
 /// break out of that quoting, so it is rejected outright (it can never be a
 /// valid URL anyway).
-#[cfg(target_os = "windows")]
 fn codex_command(base_url: &str) -> std::io::Result<String> {
     if base_url.contains('\'') {
         return Err(std::io::Error::new(
@@ -483,8 +503,40 @@ fn codex_command(base_url: &str) -> std::io::Result<String> {
 }
 
 /// Environment variable Codex reads the (dummy) API key from.
-#[cfg(target_os = "windows")]
 const CODEX_KEY_ENV: &str = "CODEX_PROXY_KEY";
+/// Dummy value for `CODEX_KEY_ENV` — the proxy injects the real key from memory.
+const CODEX_KEY_VALUE: &str = "proxy-managed";
+
+/// Picks the agent whose launch snippet the settings window shows: the one the
+/// active endpoint can serve (Codex for a responses endpoint, Copilot for chat),
+/// defaulting to Copilot when no endpoint is configured yet.
+fn snippet_agent(active_api: Option<&str>) -> Agent {
+    match active_api {
+        Some(api) if api == Agent::Codex.api() => Agent::Codex,
+        _ => Agent::Copilot,
+    }
+}
+
+/// Renders the exact manual PowerShell snippet a user would run to launch
+/// `agent` against the proxy at `base_url`. Pure string building (no process
+/// spawning), so it compiles and is unit-tested on every platform — it is the
+/// single source of truth the settings webview displays, mirroring what
+/// `spawn_agent` executes on Windows. Reuses `codex_command` for the Codex line,
+/// so the snippet can never drift from the launched command (and inherits its
+/// single-quote rejection).
+fn manual_command(agent: Agent, base_url: &str) -> std::io::Result<String> {
+    Ok(match agent {
+        Agent::Copilot => format!(
+            "$env:{COPILOT_BASE_URL_ENV}=\"{base_url}\"\n\
+             $env:{COPILOT_MODEL_ENV}=\"{PROXY_MODEL_LABEL}\"   # value is arbitrary — the proxy overrides it\n\
+             copilot"
+        ),
+        Agent::Codex => format!(
+            "$env:{CODEX_KEY_ENV}=\"{CODEX_KEY_VALUE}\"   # dummy — the proxy injects the real key\n{}",
+            codex_command(base_url)?
+        ),
+    })
+}
 
 #[cfg(not(target_os = "windows"))]
 fn spawn_agent(_kind: Agent, _base_url: &str) -> std::io::Result<std::process::Child> {
@@ -648,7 +700,6 @@ mod tests {
         assert_eq!(local_base_url("[::]:7000"), "http://127.0.0.1:7000");
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn codex_command_single_quotes_base_url() {
         // The base URL must be wrapped in single quotes so shell metacharacters
@@ -657,10 +708,58 @@ mod tests {
         assert!(cmd.contains("-c 'model_providers.proxy.base_url=http://127.0.0.1:8080'"));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn codex_command_rejects_single_quote() {
         // A quote would break out of the quoting — reject it outright.
         assert!(codex_command("http://127.0.0.1:8080'whoami").is_err());
+    }
+
+    #[test]
+    fn manual_command_copilot_sets_byok_env_then_runs_copilot() {
+        let cmd = manual_command(Agent::Copilot, "http://127.0.0.1:8080").unwrap();
+        assert!(cmd.starts_with("$env:COPILOT_PROVIDER_BASE_URL=\"http://127.0.0.1:8080\""));
+        assert!(cmd.contains("$env:COPILOT_MODEL=\"copilot-proxy-model\""));
+        assert!(cmd.trim_end().ends_with("copilot"));
+        // The old generic OpenAI snippet (wrong for every agent) must be gone.
+        assert!(!cmd.contains("OPENAI_BASE_URL"));
+        assert!(!cmd.contains("/v1"));
+    }
+
+    #[test]
+    fn manual_command_codex_reuses_codex_command_verbatim() {
+        let base = "http://127.0.0.1:8080";
+        let cmd = manual_command(Agent::Codex, base).unwrap();
+        assert!(cmd.starts_with("$env:CODEX_PROXY_KEY=\"proxy-managed\""));
+        // Embedding codex_command's output keeps the snippet identical to what
+        // spawn_agent actually launches.
+        assert!(cmd.contains(&codex_command(base).unwrap()));
+    }
+
+    #[test]
+    fn manual_command_codex_propagates_single_quote_rejection() {
+        assert!(manual_command(Agent::Codex, "http://127.0.0.1:8080'x").is_err());
+    }
+
+    #[test]
+    fn manual_command_uses_loopback_rewrite_for_wildcard_bind() {
+        // The snippet must carry a reachable address, not the wildcard bind.
+        let cmd = manual_command(Agent::Copilot, &local_base_url("0.0.0.0:8080")).unwrap();
+        assert!(cmd.contains("http://127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn state_view_snippet_follows_active_api() {
+        let watch = AgentWatch::default();
+        // Chat endpoint → Copilot snippet.
+        let chat = state_with_endpoint("https://e.example/v1/chat/completions");
+        assert!(state_view(&chat, &watch)
+            .manual_command
+            .trim_end()
+            .ends_with("copilot"));
+        // Responses endpoint → Codex snippet.
+        let resp = state_with_endpoint("https://e.example/v1/responses");
+        assert!(state_view(&resp, &watch)
+            .manual_command
+            .contains("codex -c model_provider=proxy"));
     }
 }
