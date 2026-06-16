@@ -42,10 +42,13 @@ Cargo workspace, two members:
     `set_selected_model()` (persists the choice per-endpoint to `ui_state.json`).
     Persists config on mutation (`persist_config` is best-effort /
     last-writer-wins; the in-memory state stays authoritative).
-  - `models.rs` — `ModelInfo { id, chat, kind }`, `ModelKind`, and
-    `classify_model(id)` (pure, id-heuristic, unit-tested; matches on **word
-    tokens**, not raw substrings, so e.g. `watts-3b`/`vanguard-instruct` stay
-    chat). `ModelKind` variants are a three-way sync point: each must have a
+  - `models.rs` — `ModelInfo { id, chat, kind, max_prompt_tokens,
+    max_output_tokens }` (the two token caps are best-effort, filled from the
+    upstream `/models` payload by `proxy::extract_token_limits`, `None` when the
+    endpoint omits them — they feed Copilot's `COPILOT_PROVIDER_MAX_*`),
+    `ModelKind`, and `classify_model(id)` (pure, id-heuristic, unit-tested;
+    matches on **word tokens**, not raw substrings, so e.g.
+    `watts-3b`/`vanguard-instruct` stay chat). `ModelKind` variants are a three-way sync point: each must have a
     `cp-kindtag--*` class in `dist/styles.css` and an entry in `MODEL_KINDS`
     (`dist/validation.js`); the webview degrades an unknown kind to the bare tag.
   - `atomic_io.rs` — `write_atomic(path, bytes)` (crate-internal): temp-write +
@@ -63,19 +66,24 @@ Cargo workspace, two members:
     to `RuntimeConfig` (seed only; `config.toml` is optional as of 0.3.0). Its
     `default_model` is parsed for back-compat but **no longer forwarded** (the
     active model is now a per-endpoint `ui_state.json` preference).
-  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to the config; two
+  - `ui_state.rs` — `ui_state.json` (non-secret prefs) next to the config; three
     per-endpoint maps keyed by endpoint base URL: a tray-visible model set
-    (`visible_model_ids()`, `set_visible_models()`; `None` = all chat models) and
-    the active-model selection (`selected_models`; restored on catalog load —
-    missing = first model). Both writes serialize under `ui_io`. `load` logs
-    corruption; `save` is atomic. `ui_state.json` is gitignored.
+    (`visible_model_ids()`, `set_visible_models()`; `None` = all chat models), the
+    active-model selection (`selected_models`; restored on catalog load —
+    missing = first model), and the manual Copilot token-limit override
+    (`TokenOverride`, `token_overrides()`/`set_token_overrides()`; absent = use the
+    selected model's advertised limits, surfaced via
+    `AppState::copilot_token_limits()`). All writes serialize under `ui_io`. `load`
+    logs corruption; `save` is atomic. `ui_state.json` is gitignored.
 - **`src-tauri/`** — Tauri v2 app.
   - `tray.rs` — native tray menu (status line, **"Models" submenu** of the
     endpoint's visible chat models, Refresh, Run <agent> for supported agents,
     Settings, Quit) + two-state icon (`update_tray_icon`, PNGs `include_bytes!`d).
     Models are in a submenu so first-level items stay reachable with huge catalogs.
   - `commands.rs` — `#[tauri::command]`s: `get_state`, `set_api_key`,
-    `forget_api_key`, `set_model`, `run_agent`, `list_agents`, `refresh_models`,
+    `forget_api_key`, `set_model` (returns the refreshed `StateView` so the
+    snippet tracks the model), `set_token_limits` (manual Copilot token-budget
+    override), `run_agent`, `list_agents`, `refresh_models`,
     `set_visible_models`, `set_endpoint`, `set_listen_addr` (both async;
     `set_endpoint` probes + swaps atomically — and **deliberately does not restart
     the proxy** (routing reads `base_url()` per request; only an in-flight request
@@ -89,8 +97,10 @@ Cargo workspace, two members:
     wildcard/non-loopback listen address to `127.0.0.1:<port>` for the launched
     agents (loopback peer ⇒ no token needed). `Agent` enum + `agent_supported()`
     (gated on the single `active_api()`). `StateView` (`endpoint_url`,
-    `active_api`, `expose_to_network`, `proxy_token`, `running_agent`) is the
-    JS↔Rust contract. `get_startup_warning` returns the one-shot `StartupNotice`
+    `active_api`, `expose_to_network`, `proxy_token`, `running_agent`,
+    `manual_command` — the backend-rendered "run manually" snippet for the
+    active agent, so the webview never re-derives the env-var/flag wiring — plus
+    the `token_*_override` inputs) is the JS↔Rust contract. `get_startup_warning` returns the one-shot `StartupNotice`
     (managed in `main.rs` from `ResolvedConfig::startup_warning`) so the webview
     can toast a config-reset notice once on load. `AgentWatch` (managed state, `.manage`d in `main.rs`) is a
     deliberately **single-slot** registry of the launched agent terminal: it owns

@@ -1,6 +1,6 @@
 use crate::models::ModelInfo;
 use crate::settings::{ApiKind, RuntimeConfig};
-use crate::ui_state::UiStateFile;
+use crate::ui_state::{TokenOverride, UiStateFile};
 use secrecy::SecretString;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -48,6 +48,10 @@ pub struct AppState {
     /// Models shown in the tray's "Models" submenu for the current endpoint.
     /// `None` means "not curated" → all chat models are shown by default.
     visible_models: Mutex<Option<Vec<String>>>,
+    /// Per-endpoint manual override of the Copilot launch token budget, cached
+    /// for the current endpoint (the source of truth on disk is `ui_state.json`).
+    /// Empty fields fall back to the selected model's advertised limits.
+    token_override: Mutex<TokenOverride>,
     /// Where UI preferences persist (`ui_state.json`); `None` disables saving
     /// (e.g. in tests). Set by the host app via [`AppState::load_ui_state`].
     ui_state_path: Mutex<Option<PathBuf>>,
@@ -71,6 +75,7 @@ impl AppState {
             api_key: Mutex::new(None),
             request_log: Mutex::new(RequestLog::default()),
             visible_models: Mutex::new(None),
+            token_override: Mutex::new(TokenOverride::default()),
             ui_state_path: Mutex::new(None),
             ui_io: Mutex::new(()),
             http: reqwest::Client::new(),
@@ -187,7 +192,7 @@ impl AppState {
             *models_guard = models;
         }
         self.persist_config();
-        self.reload_visible_for_endpoint();
+        self.reload_ui_for_endpoint();
     }
 
     /// Replaces the listen address and persists it. The caller is responsible
@@ -236,17 +241,21 @@ impl AppState {
         let key = self.endpoint_key();
         let file = UiStateFile::load(&path);
         *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
+        *self.token_override.lock().unwrap() =
+            file.token_overrides.get(&key).copied().unwrap_or_default();
         *self.ui_state_path.lock().unwrap() = Some(path);
     }
 
-    /// Reloads the tray-visibility selection for the current endpoint from disk
-    /// (used after the endpoint changes).
-    fn reload_visible_for_endpoint(&self) {
+    /// Reloads this endpoint's persisted UI preferences (tray visibility and the
+    /// token-limit override) from disk — used after the endpoint changes.
+    fn reload_ui_for_endpoint(&self) {
         let path = self.ui_state_path.lock().unwrap().clone();
         if let Some(path) = path {
             let key = self.endpoint_key();
             let file = UiStateFile::load(&path);
             *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
+            *self.token_override.lock().unwrap() =
+                file.token_overrides.get(&key).copied().unwrap_or_default();
         }
     }
 
@@ -335,7 +344,7 @@ impl AppState {
             }
         }
         *self.models.lock().unwrap() = models;
-        self.reload_visible_for_endpoint();
+        self.reload_ui_for_endpoint();
     }
 
     pub fn selected_model(&self) -> String {
@@ -354,6 +363,60 @@ impl AppState {
         *self.selected_model.lock().unwrap() = model.clone();
         self.persist_selected_model(&model);
         true
+    }
+
+    /// The manual token-limit override saved for the current endpoint, as
+    /// `(max_prompt_tokens, max_output_tokens)`. A `None` field means "fall back
+    /// to the selected model's advertised limit" — used to fill the settings
+    /// window's input fields.
+    pub fn token_overrides(&self) -> (Option<u32>, Option<u32>) {
+        let o = *self.token_override.lock().unwrap();
+        (o.prompt, o.output)
+    }
+
+    /// The selected model's advertised token limits (`max_prompt_tokens`,
+    /// `max_output_tokens`), or `(None, None)` when nothing is selected or the
+    /// upstream `/models` entry didn't carry them.
+    pub fn selected_model_limits(&self) -> (Option<u32>, Option<u32>) {
+        let selected = self.selected_model.lock().unwrap().clone();
+        let models = self.models.lock().unwrap();
+        models
+            .iter()
+            .find(|m| m.id == selected)
+            .map(|m| (m.max_prompt_tokens, m.max_output_tokens))
+            .unwrap_or((None, None))
+    }
+
+    /// The effective token budget handed to the Copilot launch: the manual
+    /// per-endpoint override wins field-by-field, falling back to the selected
+    /// model's advertised limits, else `None` (Copilot then uses its defaults).
+    pub fn copilot_token_limits(&self) -> (Option<u32>, Option<u32>) {
+        let (ovr_prompt, ovr_output) = self.token_overrides();
+        let (auto_prompt, auto_output) = self.selected_model_limits();
+        (ovr_prompt.or(auto_prompt), ovr_output.or(auto_output))
+    }
+
+    /// Replaces the per-endpoint manual token-limit override and persists it
+    /// (best-effort) to `ui_state.json`, serialized under `ui_io` like the other
+    /// preference writers. Either field may be `None`; an all-`None` override is
+    /// removed from disk rather than stored.
+    pub fn set_token_overrides(&self, prompt: Option<u32>, output: Option<u32>) {
+        let override_ = TokenOverride { prompt, output };
+        *self.token_override.lock().unwrap() = override_;
+        let path = self.ui_state_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let _io = self.ui_io.lock().unwrap();
+            let key = self.endpoint_key();
+            let mut file = UiStateFile::load(&path);
+            if override_ == TokenOverride::default() {
+                file.token_overrides.remove(&key);
+            } else {
+                file.token_overrides.insert(key, override_);
+            }
+            if let Err(e) = file.save(&path) {
+                tracing::warn!("failed to persist ui_state.json: {e}");
+            }
+        }
     }
 
     /// Stores the API key in memory. An empty string clears the key.
@@ -651,6 +714,57 @@ mod tests {
         // reload the first state would still be uncurated and show both models.
         state.set_models(vec![classify_model("gpt-4o"), classify_model("claude-3")]);
         assert_eq!(state.visible_model_ids(), vec!["claude-3"]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn copilot_token_limits_prefers_override_then_model_then_none() {
+        let state = state_with(&["gpt-4o"]);
+        // Replace the catalog with a model that advertises token limits.
+        state.set_models(vec![ModelInfo {
+            id: "gpt-4o".into(),
+            chat: true,
+            kind: None,
+            max_prompt_tokens: Some(120_000),
+            max_output_tokens: Some(16_000),
+        }]);
+        assert!(state.set_selected_model("gpt-4o"));
+
+        // No override → the selected model's advertised limits.
+        assert_eq!(state.copilot_token_limits(), (Some(120_000), Some(16_000)));
+
+        // Override wins field-by-field; a None field falls back to the model.
+        state.set_token_overrides(Some(64_000), None);
+        assert_eq!(state.copilot_token_limits(), (Some(64_000), Some(16_000)));
+        assert_eq!(state.token_overrides(), (Some(64_000), None));
+
+        // Clearing the override returns to the advertised limits.
+        state.set_token_overrides(None, None);
+        assert_eq!(state.copilot_token_limits(), (Some(120_000), Some(16_000)));
+    }
+
+    #[test]
+    fn copilot_token_limits_none_when_model_omits_them() {
+        let state = state_with(&["gpt-4o"]); // classify_model carries no limits
+        assert!(state.set_selected_model("gpt-4o"));
+        assert_eq!(state.copilot_token_limits(), (None, None));
+    }
+
+    #[test]
+    fn token_override_persists_and_restores_per_endpoint() {
+        let path = std::env::temp_dir().join("copilot_proxy_token_override_restore_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/chat/completions";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+        state.set_token_overrides(Some(99_000), Some(2_000));
+
+        // A fresh state on the same endpoint restores the persisted override.
+        let reloaded = chat_state(endpoint);
+        reloaded.load_ui_state(path.clone());
+        assert_eq!(reloaded.token_overrides(), (Some(99_000), Some(2_000)));
 
         let _ = std::fs::remove_file(&path);
     }

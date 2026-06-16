@@ -141,8 +141,14 @@ pub async fn fetch_models_from(
         .and_then(|d| d.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
-                .map(classify_model)
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|id| id.as_str())?;
+                    let mut info = classify_model(id);
+                    let (prompt, output) = extract_token_limits(m);
+                    info.max_prompt_tokens = prompt;
+                    info.max_output_tokens = output;
+                    Some(info)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -151,6 +157,41 @@ pub async fn fetch_models_from(
         return Err(format!("no models returned by {url}"));
     }
     Ok(models)
+}
+
+/// Best-effort extraction of a model's advertised token limits from its
+/// `/models` entry. Plain OpenAI `/models` reports none, but gateways differ
+/// (OpenRouter: `context_length` + `top_provider.max_completion_tokens`;
+/// LiteLLM: `max_input_tokens` / `max_output_tokens`; vLLM: `max_model_len`), so
+/// several key names are probed in priority order — the first that holds a valid
+/// unsigned integer wins. Returns `(max_prompt_tokens, max_output_tokens)`;
+/// either is `None` when nothing usable is present.
+fn extract_token_limits(model: &serde_json::Value) -> (Option<u32>, Option<u32>) {
+    let first_u32 = |keys: &[&str]| -> Option<u32> {
+        keys.iter().find_map(|k| {
+            model
+                .get(*k)
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok())
+        })
+    };
+    let prompt = first_u32(&[
+        "max_prompt_tokens",
+        "max_input_tokens",
+        "context_length",
+        "context_window",
+        "max_model_len",
+    ]);
+    let output =
+        first_u32(&["max_output_tokens", "max_completion_tokens", "max_tokens"]).or_else(|| {
+            // OpenRouter nests the completion cap under `top_provider`.
+            model
+                .get("top_provider")
+                .and_then(|t| t.get("max_completion_tokens"))
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok())
+        });
+    (prompt, output)
 }
 
 async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Response {
@@ -354,5 +395,42 @@ mod tests {
             Some("Bearer secret"),
             Some("secret")
         ));
+    }
+
+    #[test]
+    fn extract_token_limits_reads_openrouter_shape() {
+        let m = serde_json::json!({
+            "id": "x",
+            "context_length": 200000,
+            "top_provider": { "max_completion_tokens": 8192 }
+        });
+        assert_eq!(extract_token_limits(&m), (Some(200_000), Some(8192)));
+    }
+
+    #[test]
+    fn extract_token_limits_reads_litellm_shape() {
+        let m = serde_json::json!({
+            "id": "x",
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+        });
+        assert_eq!(extract_token_limits(&m), (Some(128_000), Some(16384)));
+    }
+
+    #[test]
+    fn extract_token_limits_skips_unusable_value_for_a_later_key() {
+        // context_length is present but null → fall through to context_window.
+        let m = serde_json::json!({
+            "id": "x",
+            "context_length": null,
+            "context_window": 32000
+        });
+        assert_eq!(extract_token_limits(&m).0, Some(32000));
+    }
+
+    #[test]
+    fn extract_token_limits_absent_when_bare_id() {
+        let m = serde_json::json!({ "id": "x" });
+        assert_eq!(extract_token_limits(&m), (None, None));
     }
 }

@@ -182,6 +182,22 @@ Use `http://127.0.0.1:8080` without `/v1`: Copilot appends `/chat/completions`,
 and the proxy forwards that path to your endpoint base (the endpoint URL minus its
 API suffix).
 
+#### Token limits (silencing the catalog warning)
+
+By default Copilot warns that `copilot-proxy-model` is not in its built-in
+catalog and falls back to default token limits. The proxy fills
+`COPILOT_PROVIDER_MAX_PROMPT_TOKENS` / `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS`
+automatically from the selected model's `/models` metadata when the upstream
+advertises it (OpenRouter-style `context_length` / `max_completion_tokens`,
+LiteLLM `max_input_tokens` / `max_output_tokens`, vLLM `max_model_len`, …). When
+it doesn't — plain OpenAI / Ollama report no context length — set the **max
+prompt / output tokens** fields in the settings window to override (a value you
+enter wins over auto-detection). Either source silences the warning; leaving both
+empty keeps Copilot's own defaults.
+
+> Copilot reads these once at launch, so they reflect the model selected when you
+> start it — re-launch after switching models if you want the new model's budget.
+
 ### Configuring Codex CLI
 
 The **"Run Codex"** button (tray or settings window) launches `codex` with an
@@ -191,11 +207,15 @@ The equivalent manual commands are shown under **"Copy commands"**:
 ```powershell
 $env:CODEX_PROXY_KEY="proxy-managed"   # dummy — the proxy injects the real key
 codex -c model_provider=proxy `
-  -c model_providers.proxy.base_url="http://127.0.0.1:8080" `
+  -c model_providers.proxy.name=copilot-proxy `
+  -c 'model_providers.proxy.base_url=http://127.0.0.1:8080' `
   -c model_providers.proxy.wire_api=responses `
   -c model_providers.proxy.env_key=CODEX_PROXY_KEY `
   -c model=copilot-proxy-model
 ```
+
+The settings window's **Copy commands** renders this as a single line (the
+backtick continuations above are only for readability).
 
 > **Important:** since February 2026 Codex speaks **only the Responses API**
 > (`wire_api = "responses"`); the `chat` wire API was removed. Your endpoint must

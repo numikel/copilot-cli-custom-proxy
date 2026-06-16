@@ -14,7 +14,7 @@ const ui = {
   phase: "no-endpoint", // no-endpoint | no-key | loading | ready | error
   errorMsg: "",
   hasApiKey: false,
-  models: [], // [{id, chat, kind}]
+  models: [], // [{id, chat, kind, max_prompt_tokens, max_output_tokens}]
   selected: "",
   listenAddr: "",
   exposeToNetwork: false, // allow binding beyond loopback (gated by a token)
@@ -24,6 +24,9 @@ const ui = {
   requestLog: { count: 0, last_model: "", last_path: "", last_target: "", last_status: null },
   agents: [], // [{id,label,api,enabled}]
   running: null, // agent id currently launched from here
+  manualCommand: "", // backend-rendered "run manually" snippet for the active agent
+  tokenPromptOverride: null, // manual Copilot max-prompt-tokens override (null = auto)
+  tokenOutputOverride: null, // manual Copilot max-output-tokens override (null = auto)
   filter: "",
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
@@ -72,6 +75,14 @@ function adoptState(s) {
   // Backend-tracked launched-agent terminal — the poll makes this the source of
   // truth for the "live" badge (covers launches from the tray too).
   ui.running = s.running_agent || null;
+  // Backend renders the exact "run manually" command for the active agent, so
+  // the webview never re-derives the env-var / flag wiring; a successful
+  // endpoint/listen change re-renders it via render().
+  ui.manualCommand = s.manual_command || "";
+  // Manual per-endpoint token-limit override (null = use the model's advertised
+  // limit, which the inputs show as a placeholder read from `models`).
+  ui.tokenPromptOverride = s.token_prompt_override ?? null;
+  ui.tokenOutputOverride = s.token_output_override ?? null;
 }
 
 async function loadState() {
@@ -255,22 +266,36 @@ function renderAgents() {
     btn.onclick = () => runAgent(btn.dataset.id);
   });
   renderCommands();
+  renderTokenLimits();
 }
 
 function commandText() {
-  // Fallback only renders before the first loadState — keep it equal to the
-  // backend's DEFAULT_LISTEN_ADDR so a copied command never targets a port the
-  // proxy doesn't listen on.
-  const listen = ui.listenAddr || "127.0.0.1:8080";
-  const supported = ui.agents.filter((a) => a.enabled).map((a) => a.id);
-  const first = supported[0] || "copilot";
-  const others = supported.slice(1);
-  const runLine = others.length ? `${first}        # or: ${others.join(", ")}` : first;
-  return `$env:OPENAI_BASE_URL = "http://${listen}/v1"\n$env:OPENAI_API_KEY  = "proxy-managed"\n${runLine}`;
+  // The backend renders the exact snippet (correct per active agent, with the
+  // reachable base URL — and token limits — baked in); the webview only shows it.
+  return ui.manualCommand || "—";
 }
 
 function renderCommands() {
   $("cmd-block").textContent = commandText();
+}
+
+// Copilot token-budget inputs: shown only for a chat (Copilot) endpoint, since
+// COPILOT_PROVIDER_MAX_* don't apply to Codex. Each field holds the manual
+// override; its placeholder shows the value auto-detected from the selected
+// model (or "auto" when the upstream didn't advertise one).
+function renderTokenLimits() {
+  const shown = ui.activeApi === "chat";
+  $("tok-limits").hidden = !shown;
+  $("tok-foot").hidden = !shown;
+  if (!shown) return;
+  const model = ui.models.find((m) => m.id === ui.selected);
+  const fill = (el, override, auto) => {
+    if (document.activeElement === el) return; // don't fight the user's typing
+    el.value = override != null ? String(override) : "";
+    el.placeholder = auto ? String(auto) : "auto";
+  };
+  fill($("tok-prompt"), ui.tokenPromptOverride, model && model.max_prompt_tokens);
+  fill($("tok-output"), ui.tokenOutputOverride, model && model.max_output_tokens);
 }
 
 // ───────────────────────── render: status grid ─────────────────────────
@@ -603,11 +628,32 @@ function setRefreshSpinning(on) {
 
 async function pickModel(id) {
   try {
-    await invoke("set_model", { model: id });
-    ui.selected = id;
+    // set_model returns the refreshed state so the snippet's token budget and
+    // the override placeholders track the newly selected model.
+    adoptState(await invoke("set_model", { model: id }));
     renderModels();
     renderStatus();
+    renderCommands();
+    renderTokenLimits();
     toast(`Active model: ${shortId(id)}`);
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
+// Saves (or clears) the manual Copilot token-limit override for this endpoint.
+async function applyTokenLimits() {
+  const pEl = $("tok-prompt");
+  const oEl = $("tok-output");
+  const err = tokenLimitError(pEl.value) || tokenLimitError(oEl.value);
+  if (err) {
+    toast(err, "err");
+    return;
+  }
+  const num = (el) => (el.value.trim() === "" ? null : Number(el.value.trim()));
+  try {
+    adoptState(await invoke("set_token_limits", { prompt: num(pEl), output: num(oEl) }));
+    render();
   } catch (e) {
     toast(String(e), "err");
   }
@@ -712,6 +758,12 @@ function bind() {
   $("forget-key-btn").onclick = forgetKey;
   $("refresh-btn").onclick = () => doRefresh(false);
   $("copy-cmd").onclick = copyCommands;
+  ["tok-prompt", "tok-output"].forEach((id) => {
+    $(id).addEventListener("change", applyTokenLimits);
+    $(id).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") applyTokenLimits();
+    });
+  });
   $("vis-all").onclick = selectAllVisible;
   $("vis-none").onclick = selectNoneVisible;
 
