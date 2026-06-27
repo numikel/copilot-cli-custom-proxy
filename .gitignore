@@ -22,3 +22,5 @@ ui_state.json
 .DS_Store
 .ai/**
 .claude/**
+# Internal Claude Code instructions — AI-assisted dev artifact, not user-facing
+CLAUDE.md
