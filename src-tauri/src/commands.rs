@@ -40,6 +40,10 @@ pub struct StateView {
     /// baked into `manual_command`.
     pub token_prompt_override: Option<u32>,
     pub token_output_override: Option<u32>,
+    /// Current Claude Code slot configuration (for the webview slot panel and tray).
+    pub cc_slots: proxy_core::CcSlots,
+    /// Whether every Claude Code slot is configured — the launch gate.
+    pub cc_slots_complete: bool,
 }
 
 /// Builds the JS-facing view from current state.
@@ -72,6 +76,8 @@ fn state_view(state: &AppState, watch: &AgentWatch) -> StateView {
         manual_command,
         token_prompt_override,
         token_output_override,
+        cc_slots: state.cc_slots(),
+        cc_slots_complete: state.cc_slots_complete(),
     }
 }
 
@@ -276,6 +282,25 @@ pub fn set_model(app: AppHandle, model: String) -> Result<StateView, String> {
     } else {
         Err(format!("unknown model: {model}"))
     }
+}
+
+/// Sets one Claude Code model slot for the current endpoint. `model_id = null`
+/// with `inherit = false` clears the slot; `inherit = true` (subagent only)
+/// makes Claude Code resolve it from the other slots. Validates the slot name
+/// and catalog membership, persists per-endpoint, rebuilds the tray, and returns
+/// the refreshed state.
+#[tauri::command]
+pub fn set_cc_slot(
+    app: AppHandle,
+    slot: String,
+    model_id: Option<String>,
+    inherit: bool,
+) -> Result<StateView, String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let cc_slot = CcSlot::from_id(&slot).ok_or_else(|| format!("unknown slot: {slot}"))?;
+    state.set_cc_slot(cc_slot, model_id, inherit)?;
+    let _ = crate::tray::apply_menu(&app);
+    Ok(state_view(&state, &app.state::<AgentWatch>()))
 }
 
 /// The model identifier passed to the launched CLI. Its value is arbitrary —
@@ -950,5 +975,31 @@ mod tests {
             .manual_command
             .trim_end()
             .ends_with("claude"));
+    }
+
+    #[test]
+    fn state_view_exposes_cc_slots_and_gate() {
+        use proxy_core::CcSlot;
+        let watch = AgentWatch::default();
+        let s = state_with_endpoint("https://e.example/v1/messages");
+        s.set_models(
+            ["vendor/opus", "vendor/sonnet", "vendor/haiku", "vendor/fable"]
+                .iter()
+                .map(|m| proxy_core::classify_model(m))
+                .collect(),
+        );
+        let view = state_view(&s, &watch);
+        assert!(!view.cc_slots_complete);
+        // Fill all slots → gate flips.
+        for (slot, id) in [
+            (CcSlot::Opus, "vendor/opus"),
+            (CcSlot::Sonnet, "vendor/sonnet"),
+            (CcSlot::Haiku, "vendor/haiku"),
+            (CcSlot::Fable, "vendor/fable"),
+        ] {
+            s.set_cc_slot(slot, Some(id.into()), false).unwrap();
+        }
+        s.set_cc_slot(CcSlot::Subagent, None, true).unwrap();
+        assert!(state_view(&s, &watch).cc_slots_complete);
     }
 }
