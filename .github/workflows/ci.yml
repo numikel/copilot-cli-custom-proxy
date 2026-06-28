@@ -76,7 +76,7 @@ jobs:
         run: |
           $max = 3
           for ($i = 1; $i -le $max; $i++) {
-            cargo tauri build --locked
+            cargo tauri build -- --locked
             if ($LASTEXITCODE -eq 0) { exit 0 }
             if ($i -eq $max) { exit $LASTEXITCODE }
             Write-Host "Build attempt $i failed, retrying in 30s..."
