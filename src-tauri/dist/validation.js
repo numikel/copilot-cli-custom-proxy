@@ -4,22 +4,24 @@
 // keep it dependency-free and side-effect-free.
 
 // API mode suffixes — the endpoint URL must end in one of these.
-const API_SUFFIX = { chat: "/chat/completions", responses: "/responses" };
+const API_SUFFIX = { chat: "/chat/completions", responses: "/responses", messages: "/messages" };
 
-// The wire API implied by a URL's suffix ("chat" | "responses" | null).
+// The wire API implied by a URL's suffix ("chat" | "responses" | "messages" | null).
 function detectApi(url) {
   const u = String(url || "").trim().replace(/\/+$/, "");
   if (u.endsWith(API_SUFFIX.chat)) return "chat";
   if (u.endsWith(API_SUFFIX.responses)) return "responses";
+  if (u.endsWith(API_SUFFIX.messages)) return "messages";
   return null;
 }
 
-// Rewrites a URL's API suffix (swapping chat ⟷ responses, or appending when the
-// URL currently stops at the base, e.g. ".../v1").
+// Rewrites a URL's API suffix (swapping among chat / responses / messages, or
+// appending when the URL currently stops at the base, e.g. ".../v1").
 function rewriteSuffix(url, suffix) {
   let u = String(url || "").trim().replace(/\/+$/, "");
   if (u.endsWith(API_SUFFIX.chat)) u = u.slice(0, -API_SUFFIX.chat.length);
   else if (u.endsWith(API_SUFFIX.responses)) u = u.slice(0, -API_SUFFIX.responses.length);
+  else if (u.endsWith(API_SUFFIX.messages)) u = u.slice(0, -API_SUFFIX.messages.length);
   u = u.replace(/\/+$/, "");
   return u + suffix;
 }
@@ -29,7 +31,7 @@ function rewriteSuffix(url, suffix) {
 function endpointError(url) {
   const u = String(url || "").trim();
   if (!/^https?:\/\//i.test(u)) return "URL must start with http:// or https://";
-  if (!detectApi(u)) return "URL must end in /chat/completions or /responses (not just /v1).";
+  if (!detectApi(u)) return "URL must end in /chat/completions, /responses, or /messages (not just /v1).";
   return null;
 }
 
