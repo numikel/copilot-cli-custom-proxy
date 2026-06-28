@@ -84,11 +84,12 @@
       <div class="cp-seg" id="api-switch" role="group" aria-label="API mode">
         <button type="button" class="cp-seg-opt" id="api-chat" data-api="chat" data-suffix="/chat/completions">Chat completions</button>
         <button type="button" class="cp-seg-opt" id="api-responses" data-api="responses" data-suffix="/responses">Responses</button>
+        <button type="button" class="cp-seg-opt" id="api-messages" data-api="messages" data-suffix="/messages">Messages</button>
       </div>
       <div class="cp-key-foot">
         <span class="cp-key-note">
           <svg width="13" height="13"><use href="#i-arrow"/></svg>
-          Full URL — must end in /chat/completions or /responses (not just /v1).
+          Full URL — must end in /chat/completions, /responses, or /messages (not just /v1).
         </span>
       </div>
     </div>
@@ -179,6 +180,10 @@
       <span class="cp-sec-meta" id="agent-meta">0 CLIs</span>
     </div>
     <div class="cp-agentgrid" id="agent-grid"><!-- populated by app.js --></div>
+    <div class="cp-ccslots" id="cc-slots" hidden>
+      <div class="cp-ccslots-hd">Claude Code models</div>
+      <div id="cc-slot-rows"><!-- populated by app.js --></div>
+    </div>
     <div class="cp-toklimits" id="tok-limits" hidden>
       <label class="cp-tokfield">
         <span class="cp-toklbl">max prompt tokens</span>
