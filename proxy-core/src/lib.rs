@@ -5,6 +5,7 @@
 //! so it can be fully tested on any platform.
 
 mod atomic_io;
+mod claude;
 mod config;
 mod models;
 mod proxy;
@@ -12,6 +13,7 @@ mod settings;
 mod state;
 mod ui_state;
 
+pub use claude::CcSlot;
 pub use config::{Config, ConfigError};
 pub use models::{classify_model, ModelInfo, ModelKind};
 pub use proxy::{build_router, fetch_models, fetch_models_from};
