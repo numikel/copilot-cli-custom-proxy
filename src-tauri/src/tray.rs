@@ -1,4 +1,4 @@
-use proxy_core::AppState;
+use proxy_core::{ApiKind, AppState, CcSlot, CcSlots};
 use std::sync::Arc;
 use tauri::{
     image::Image,
@@ -53,6 +53,9 @@ fn status_line(api_configured: bool, chat_ids: &[String], selected: &str) -> Str
 }
 
 fn status_text(state: &AppState) -> String {
+    if state.active_api() == Some(ApiKind::Messages) {
+        return cc_status_line(&state.cc_slots());
+    }
     status_line(
         state.active_api().is_some(),
         &state.chat_model_ids(),
@@ -60,47 +63,100 @@ fn status_text(state: &AppState) -> String {
     )
 }
 
+/// Status-line text for a Claude Code (messages) endpoint, factored out so it is
+/// unit-testable without an `AppState`.
+fn cc_status_line(slots: &CcSlots) -> String {
+    if slots.is_complete() {
+        "Claude Code — all slots set".to_string()
+    } else {
+        format!("Claude Code — {}/5 slots set", slots.configured_count())
+    }
+}
+
+/// Appends the model-selection section. Chat/responses get a single "Models"
+/// submenu (the active model checked). The messages API gets one submenu per
+/// Claude Code slot, each listing the endpoint's visible chat models with the
+/// slot's current choice checked; the subagent submenu adds an "Inherit" toggle.
+/// Menu item ids: `model::<id>` (single) and `cc::<slot>::<id>` /
+/// `cc::subagent::__inherit__` (slots).
+fn append_models_section(
+    app: &AppHandle,
+    menu: &Menu<Wry>,
+    state: &AppState,
+) -> tauri::Result<()> {
+    if state.active_api() == Some(ApiKind::Messages) {
+        let slots = state.cc_slots();
+        let visible = state.visible_model_ids();
+        for &slot in CcSlot::ALL {
+            let submenu = Submenu::with_id(app, format!("cc_menu::{}", slot.id()), slot.display_name(), true)?;
+            if slot == CcSlot::Subagent {
+                let inherit = CheckMenuItem::with_id(
+                    app,
+                    "cc::subagent::__inherit__",
+                    "Inherit",
+                    true,
+                    slots.subagent_inherit,
+                    None::<&str>,
+                )?;
+                submenu.append(&inherit)?;
+                submenu.append(&PredefinedMenuItem::separator(app)?)?;
+            }
+            if visible.is_empty() {
+                let empty = MenuItem::with_id(
+                    app,
+                    format!("cc_empty::{}", slot.id()),
+                    "No models — Refresh first",
+                    false,
+                    None::<&str>,
+                )?;
+                submenu.append(&empty)?;
+            } else {
+                let current = slots.model_for(slot);
+                for model in &visible {
+                    let item = CheckMenuItem::with_id(
+                        app,
+                        format!("cc::{}::{}", slot.id(), model),
+                        model,
+                        true,
+                        current == Some(model.as_str()),
+                        None::<&str>,
+                    )?;
+                    submenu.append(&item)?;
+                }
+            }
+            menu.append(&submenu)?;
+        }
+        return Ok(());
+    }
+
+    // Chat / responses: a single flat Models submenu (existing behavior).
+    let selected = state.selected_model();
+    let models_menu = Submenu::with_id(app, "models_menu", "Models", true)?;
+    let ids = tray_submenu_ids(state, &selected);
+    if ids.is_empty() {
+        let empty = MenuItem::with_id(app, "models_empty", "No models — Refresh first", false, None::<&str>)?;
+        models_menu.append(&empty)?;
+    } else {
+        for model in ids {
+            let checked = model == selected;
+            let item = CheckMenuItem::with_id(app, format!("model::{model}"), &model, true, checked, None::<&str>)?;
+            models_menu.append(&item)?;
+        }
+    }
+    menu.append(&models_menu)?;
+    Ok(())
+}
+
 /// Builds the tray menu from the current state: status line, model toggles,
 /// then Refresh models / Run <agent> (one per supported agent) / Settings / Quit.
 fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
-    let selected = state.selected_model();
-
     let status = MenuItem::with_id(app, "status", status_text(state), false, None::<&str>)?;
 
     let menu = Menu::new(app)?;
     menu.append(&status)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
-    // Models live in their own submenu so the first level stays short and
-    // "Open Settings…"/"Quit" are always reachable, even with hundreds of
-    // models. The submenu shows the endpoint's curated chat models (see the
-    // settings window); the full catalog is always available there.
-    let models_menu = Submenu::with_id(app, "models_menu", "Models", true)?;
-    let ids = tray_submenu_ids(state, &selected);
-    if ids.is_empty() {
-        let empty = MenuItem::with_id(
-            app,
-            "models_empty",
-            "No models — Refresh first",
-            false,
-            None::<&str>,
-        )?;
-        models_menu.append(&empty)?;
-    } else {
-        for model in ids {
-            let checked = model == selected;
-            let item = CheckMenuItem::with_id(
-                app,
-                format!("model::{model}"),
-                &model,
-                true,
-                checked,
-                None::<&str>,
-            )?;
-            models_menu.append(&item)?;
-        }
-    }
-    menu.append(&models_menu)?;
+    append_models_section(app, &menu, state)?;
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
@@ -113,6 +169,10 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<Wry>> {
     // Only offer agents the configured upstream can actually serve.
     for &agent in crate::commands::Agent::ALL {
         if crate::commands::agent_supported(state, agent) {
+            // Claude Code needs all slots configured before it can launch.
+            if agent == crate::commands::Agent::ClaudeCode && !state.cc_slots_complete() {
+                continue;
+            }
             menu.append(&MenuItem::with_id(
                 app,
                 format!("run::{}", agent.id()),
@@ -188,6 +248,22 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                         Err(e) => tracing::error!("refresh models failed: {e}"),
                     }
                 });
+            } else if let Some(rest) = id.strip_prefix("cc::") {
+                // rest = "<slot>::<value>" where value is a model id or "__inherit__".
+                if let Some((slot_id, value)) = rest.split_once("::") {
+                    if let Some(slot) = crate::commands::cc_slot_from_id(slot_id) {
+                        let state = app.state::<Arc<AppState>>().inner().clone();
+                        let result = if value == "__inherit__" {
+                            state.set_cc_slot(slot, None, true)
+                        } else {
+                            state.set_cc_slot(slot, Some(value.to_string()), false)
+                        };
+                        if let Err(e) = result {
+                            tracing::error!("set cc slot failed: {e}");
+                        }
+                        let _ = apply_menu(app);
+                    }
+                }
             } else if let Some(model) = id.strip_prefix("model::") {
                 let state = app.state::<Arc<AppState>>();
                 state.set_selected_model(model.to_string());
@@ -205,9 +281,23 @@ pub fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::status_line;
+    use proxy_core::{CcSlot, CcSlots};
 
     fn ids(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn cc_status_counts_configured_slots() {
+        let mut slots = CcSlots::default();
+        assert_eq!(super::cc_status_line(&slots), "Claude Code — 0/5 slots set");
+        slots.set(CcSlot::Opus, Some("a".into()), false);
+        slots.set(CcSlot::Sonnet, Some("b".into()), false);
+        slots.set(CcSlot::Haiku, Some("c".into()), false);
+        slots.set(CcSlot::Fable, Some("d".into()), false);
+        assert_eq!(super::cc_status_line(&slots), "Claude Code — 4/5 slots set");
+        slots.set(CcSlot::Subagent, None, true);
+        assert_eq!(super::cc_status_line(&slots), "Claude Code — all slots set");
     }
 
     #[test]

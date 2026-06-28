@@ -397,6 +397,11 @@ pub fn list_agents(state: State<'_, Arc<AppState>>) -> Vec<AgentInfo> {
         .collect()
 }
 
+/// Parses a Claude Code slot id (used by the tray's `cc::<slot>::…` handler).
+pub(crate) fn cc_slot_from_id(id: &str) -> Option<CcSlot> {
+    CcSlot::from_id(id)
+}
+
 /// Whether the active endpoint serves the API this agent needs. Only one API is
 /// active at a time (derived from the endpoint URL's suffix).
 pub(crate) fn agent_supported(state: &AppState, agent: Agent) -> bool {
