@@ -382,3 +382,73 @@ async fn streams_response_through() {
     let text = resp.text().await.unwrap();
     assert_eq!(text, "data: chunk-1\n\ndata: chunk-2\n\ndata: [DONE]\n\n");
 }
+
+#[tokio::test]
+async fn messages_maps_proxy_cc_label_and_strips_v1() {
+    use proxy_core::CcSlot;
+
+    // Upstream exposes /v1/messages (Claude Code targets /v1/messages; the proxy
+    // strips the duplicate /v1 because the base already ends in /v1).
+    let upstream = spawn(Router::new().route("/v1/messages", post(echo))).await;
+
+    let config = RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/v1/messages"),
+        ..RuntimeConfig::default()
+    };
+    let state = Arc::new(AppState::new(config));
+    state.set_models(vec![classify_model("vendor/opus-x")]);
+    state.set_api_key("k");
+    state
+        .set_cc_slot(CcSlot::Opus, Some("vendor/opus-x".into()), false)
+        .unwrap();
+
+    let proxy = spawn(build_router(state)).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{proxy}/v1/messages"))
+        .header("x-api-key", "client-secret")
+        .json(&json!({ "model": "proxy-cc/opus", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    // Label mapped to the configured catalog id.
+    assert_eq!(v["model"], "vendor/opus-x");
+    // Upstream auth is the injected key, not the client's x-api-key.
+    assert_eq!(v["authorization"], "Bearer k");
+    assert_eq!(v["host"], upstream.trim_start_matches("http://"));
+}
+
+#[tokio::test]
+async fn messages_unconfigured_slot_returns_502() {
+    let upstream = spawn(Router::new().route("/v1/messages", post(echo))).await;
+    let config = RuntimeConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        endpoint_url: format!("{upstream}/v1/messages"),
+        ..RuntimeConfig::default()
+    };
+    let state = Arc::new(AppState::new(config));
+    state.set_api_key("k");
+
+    let proxy = spawn(build_router(state)).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{proxy}/v1/messages"))
+        .json(&json!({ "model": "proxy-cc/opus", "messages": [] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 502);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["error"]["type"], "proxy_error");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Opus slot not configured")
+    );
+}
