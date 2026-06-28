@@ -1,4 +1,4 @@
-use proxy_core::{AppState, ModelInfo, RequestLog};
+use proxy_core::{AppState, CcSlot, ModelInfo, RequestLog};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
@@ -53,6 +53,7 @@ fn state_view(state: &AppState, watch: &AgentWatch) -> StateView {
         snippet_agent(active_api.as_deref()),
         &local_base_url(&listen_addr),
         state.copilot_token_limits(),
+        !state.cc_slots().subagent_inherit,
     )
     .unwrap_or_default();
     let (token_prompt_override, token_output_override) = state.token_overrides();
@@ -294,17 +295,24 @@ const COPILOT_MODEL_ENV: &str = "COPILOT_MODEL";
 // id is "not in the built-in catalog" and silently using fallback defaults.
 const COPILOT_MAX_PROMPT_ENV: &str = "COPILOT_PROVIDER_MAX_PROMPT_TOKENS";
 const COPILOT_MAX_OUTPUT_ENV: &str = "COPILOT_PROVIDER_MAX_OUTPUT_TOKENS";
+// Environment variables the Anthropic SDK (Claude Code) reads. The base URL
+// points at the local proxy; the API key is a dummy because the proxy injects
+// the real one from memory. Slot env vars / labels come from `proxy_core::CcSlot`.
+const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
+const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+const ANTHROPIC_API_KEY_VALUE: &str = "proxy-managed";
 
 /// CLI agents the launcher knows how to start against the proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Agent {
     Copilot,
     Codex,
+    ClaudeCode,
 }
 
 impl Agent {
     /// All agents the launcher knows about.
-    pub const ALL: &'static [Agent] = &[Agent::Copilot, Agent::Codex];
+    pub const ALL: &'static [Agent] = &[Agent::Copilot, Agent::Codex, Agent::ClaudeCode];
 
     /// Parses the agent id sent from the UI / tray (e.g. "copilot", "codex").
     pub fn from_id(id: &str) -> Option<Agent> {
@@ -316,6 +324,7 @@ impl Agent {
         match self {
             Agent::Copilot => "copilot",
             Agent::Codex => "codex",
+            Agent::ClaudeCode => "claude",
         }
     }
 
@@ -324,6 +333,7 @@ impl Agent {
         match self {
             Agent::Copilot => "Copilot",
             Agent::Codex => "Codex",
+            Agent::ClaudeCode => "Claude Code",
         }
     }
 
@@ -333,6 +343,7 @@ impl Agent {
         match self {
             Agent::Copilot => "chat",
             Agent::Codex => "responses",
+            Agent::ClaudeCode => "messages",
         }
     }
 }
@@ -440,9 +451,13 @@ pub fn run_agent(app: AppHandle, agent: String) -> Result<(), String> {
 /// indicator clears itself because every state poll re-checks the process.
 pub fn launch_agent(app: &AppHandle, kind: Agent) -> Result<(), String> {
     let state = app.state::<Arc<AppState>>();
+    if kind == Agent::ClaudeCode && !state.cc_slots_complete() {
+        return Err("Configure all Claude Code model slots before launching.".to_string());
+    }
     let base_url = local_base_url(&state.listen_addr());
     let limits = state.copilot_token_limits();
-    let child = spawn_agent(kind, &base_url, limits).map_err(|e| e.to_string())?;
+    let cc_set_subagent = !state.cc_slots().subagent_inherit;
+    let child = spawn_agent(kind, &base_url, limits, cc_set_subagent).map_err(|e| e.to_string())?;
     tracing::info!(
         agent = kind.id(),
         pid = child.id(),
@@ -483,6 +498,7 @@ fn spawn_agent(
     kind: Agent,
     base_url: &str,
     limits: (Option<u32>, Option<u32>),
+    cc_set_subagent: bool,
 ) -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     // CREATE_NEW_CONSOLE — give the spawned PowerShell its own visible window.
@@ -517,6 +533,18 @@ fn spawn_agent(
             command
                 .args(["-NoExit", "-Command", &codex_command(base_url)?])
                 .env(CODEX_KEY_ENV, CODEX_KEY_VALUE);
+        }
+        Agent::ClaudeCode => {
+            command
+                .args(["-NoExit", "-Command", "claude"])
+                .env(ANTHROPIC_BASE_URL_ENV, base_url)
+                .env(ANTHROPIC_API_KEY_ENV, ANTHROPIC_API_KEY_VALUE);
+            for &slot in CcSlot::ALL {
+                if slot == CcSlot::Subagent && !cc_set_subagent {
+                    continue;
+                }
+                command.env(slot.env_var(), slot.label());
+            }
         }
     }
 
@@ -559,6 +587,7 @@ const CODEX_KEY_VALUE: &str = "proxy-managed";
 fn snippet_agent(active_api: Option<&str>) -> Agent {
     match active_api {
         Some(api) if api == Agent::Codex.api() => Agent::Codex,
+        Some(api) if api == Agent::ClaudeCode.api() => Agent::ClaudeCode,
         _ => Agent::Copilot,
     }
 }
@@ -574,6 +603,7 @@ fn manual_command(
     agent: Agent,
     base_url: &str,
     limits: (Option<u32>, Option<u32>),
+    cc_set_subagent: bool,
 ) -> std::io::Result<String> {
     Ok(match agent {
         Agent::Copilot => {
@@ -596,6 +626,19 @@ fn manual_command(
             "$env:{CODEX_KEY_ENV}=\"{CODEX_KEY_VALUE}\"   # dummy — the proxy injects the real key\n{}",
             codex_command(base_url)?
         ),
+        Agent::ClaudeCode => {
+            let mut s = format!(
+                "$env:{ANTHROPIC_BASE_URL_ENV}=\"{base_url}\"\n\
+                 $env:{ANTHROPIC_API_KEY_ENV}=\"{ANTHROPIC_API_KEY_VALUE}\"   # dummy — the proxy injects the real key\n"
+            );
+            for &slot in CcSlot::ALL {
+                if slot == CcSlot::Subagent && !cc_set_subagent {
+                    continue;
+                }
+                s += &format!("$env:{}=\"{}\"\n", slot.env_var(), slot.label());
+            }
+            s + "claude"
+        }
     })
 }
 
@@ -604,6 +647,7 @@ fn spawn_agent(
     _kind: Agent,
     _base_url: &str,
     _limits: (Option<u32>, Option<u32>),
+    _cc_set_subagent: bool,
 ) -> std::io::Result<std::process::Child> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -629,6 +673,7 @@ mod tests {
         let s = state_with_endpoint("https://e.example/v1/responses");
         assert!(!agent_supported(&s, Agent::Copilot));
         assert!(agent_supported(&s, Agent::Codex));
+        assert!(!agent_supported(&s, Agent::ClaudeCode));
     }
 
     #[test]
@@ -636,6 +681,15 @@ mod tests {
         let s = state_with_endpoint("https://e.example/v1/chat/completions");
         assert!(agent_supported(&s, Agent::Copilot));
         assert!(!agent_supported(&s, Agent::Codex));
+        assert!(!agent_supported(&s, Agent::ClaudeCode));
+    }
+
+    #[test]
+    fn messages_endpoint_enables_only_claude_code() {
+        let s = state_with_endpoint("https://e.example/v1/messages");
+        assert!(!agent_supported(&s, Agent::Copilot));
+        assert!(!agent_supported(&s, Agent::Codex));
+        assert!(agent_supported(&s, Agent::ClaudeCode));
     }
 
     #[test]
@@ -643,6 +697,7 @@ mod tests {
         let s = state_with_endpoint("");
         assert!(!agent_supported(&s, Agent::Copilot));
         assert!(!agent_supported(&s, Agent::Codex));
+        assert!(!agent_supported(&s, Agent::ClaudeCode));
     }
 
     #[test]
@@ -781,7 +836,8 @@ mod tests {
 
     #[test]
     fn manual_command_copilot_sets_byok_env_then_runs_copilot() {
-        let cmd = manual_command(Agent::Copilot, "http://127.0.0.1:8080", (None, None)).unwrap();
+        let cmd =
+            manual_command(Agent::Copilot, "http://127.0.0.1:8080", (None, None), false).unwrap();
         assert!(cmd.starts_with("$env:COPILOT_PROVIDER_BASE_URL=\"http://127.0.0.1:8080\""));
         assert!(cmd.contains("$env:COPILOT_MODEL=\"copilot-proxy-model\""));
         assert!(cmd.trim_end().ends_with("copilot"));
@@ -793,7 +849,7 @@ mod tests {
     #[test]
     fn manual_command_codex_reuses_codex_command_verbatim() {
         let base = "http://127.0.0.1:8080";
-        let cmd = manual_command(Agent::Codex, base, (None, None)).unwrap();
+        let cmd = manual_command(Agent::Codex, base, (None, None), false).unwrap();
         assert!(cmd.starts_with("$env:CODEX_PROXY_KEY=\"proxy-managed\""));
         // Embedding codex_command's output keeps the snippet identical to what
         // spawn_agent actually launches.
@@ -802,7 +858,7 @@ mod tests {
 
     #[test]
     fn manual_command_codex_propagates_single_quote_rejection() {
-        assert!(manual_command(Agent::Codex, "http://127.0.0.1:8080'x", (None, None)).is_err());
+        assert!(manual_command(Agent::Codex, "http://127.0.0.1:8080'x", (None, None), false).is_err());
     }
 
     #[test]
@@ -812,6 +868,7 @@ mod tests {
             Agent::Copilot,
             &local_base_url("0.0.0.0:8080"),
             (None, None),
+            false,
         )
         .unwrap();
         assert!(cmd.contains("http://127.0.0.1:8080"));
@@ -823,6 +880,7 @@ mod tests {
             Agent::Copilot,
             "http://127.0.0.1:8080",
             (Some(120_000), Some(16_000)),
+            false,
         )
         .unwrap();
         assert!(cmd.contains("$env:COPILOT_PROVIDER_MAX_PROMPT_TOKENS=\"120000\""));
@@ -832,9 +890,40 @@ mod tests {
 
     #[test]
     fn manual_command_copilot_omits_unknown_token_limits() {
-        let cmd = manual_command(Agent::Copilot, "http://127.0.0.1:8080", (None, None)).unwrap();
+        let cmd =
+            manual_command(Agent::Copilot, "http://127.0.0.1:8080", (None, None), false).unwrap();
         assert!(!cmd.contains("MAX_PROMPT_TOKENS"));
         assert!(!cmd.contains("MAX_OUTPUT_TOKENS"));
+    }
+
+    #[test]
+    fn manual_command_claude_sets_anthropic_env() {
+        // Inherit ON → subagent env var omitted.
+        let cmd = manual_command(
+            Agent::ClaudeCode,
+            "http://127.0.0.1:8080",
+            (None, None),
+            false,
+        )
+        .unwrap();
+        assert!(cmd.contains("$env:ANTHROPIC_BASE_URL=\"http://127.0.0.1:8080\""));
+        assert!(cmd.contains("$env:ANTHROPIC_API_KEY=\"proxy-managed\""));
+        assert!(cmd.contains("$env:ANTHROPIC_DEFAULT_OPUS_MODEL=\"proxy-cc/opus\""));
+        assert!(cmd.contains("$env:ANTHROPIC_DEFAULT_FABLE_MODEL=\"proxy-cc/fable\""));
+        assert!(!cmd.contains("CLAUDE_CODE_SUBAGENT_MODEL"));
+        assert!(cmd.trim_end().ends_with("claude"));
+    }
+
+    #[test]
+    fn manual_command_claude_sets_subagent_when_not_inherit() {
+        let cmd = manual_command(
+            Agent::ClaudeCode,
+            "http://127.0.0.1:8080",
+            (None, None),
+            true,
+        )
+        .unwrap();
+        assert!(cmd.contains("$env:CLAUDE_CODE_SUBAGENT_MODEL=\"proxy-cc/subagent\""));
     }
 
     #[test]
@@ -851,5 +940,15 @@ mod tests {
         assert!(state_view(&resp, &watch)
             .manual_command
             .contains("codex -c model_provider=proxy"));
+    }
+
+    #[test]
+    fn state_view_snippet_follows_messages_api() {
+        let watch = AgentWatch::default();
+        let msg = state_with_endpoint("https://e.example/v1/messages");
+        assert!(state_view(&msg, &watch)
+            .manual_command
+            .trim_end()
+            .ends_with("claude"));
     }
 }
