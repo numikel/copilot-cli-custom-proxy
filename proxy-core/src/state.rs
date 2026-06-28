@@ -1,6 +1,7 @@
+use crate::claude::CcSlot;
 use crate::models::ModelInfo;
 use crate::settings::{ApiKind, RuntimeConfig};
-use crate::ui_state::{TokenOverride, UiStateFile};
+use crate::ui_state::{CcSlots, TokenOverride, UiStateFile};
 use secrecy::SecretString;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -52,6 +53,9 @@ pub struct AppState {
     /// for the current endpoint (the source of truth on disk is `ui_state.json`).
     /// Empty fields fall back to the selected model's advertised limits.
     token_override: Mutex<TokenOverride>,
+    /// Per-endpoint Claude Code slot configuration, cached for the current
+    /// endpoint (source of truth on disk is `ui_state.json`).
+    cc_slots: Mutex<CcSlots>,
     /// Where UI preferences persist (`ui_state.json`); `None` disables saving
     /// (e.g. in tests). Set by the host app via [`AppState::load_ui_state`].
     ui_state_path: Mutex<Option<PathBuf>>,
@@ -76,6 +80,7 @@ impl AppState {
             request_log: Mutex::new(RequestLog::default()),
             visible_models: Mutex::new(None),
             token_override: Mutex::new(TokenOverride::default()),
+            cc_slots: Mutex::new(CcSlots::default()),
             ui_state_path: Mutex::new(None),
             ui_io: Mutex::new(()),
             http: reqwest::Client::new(),
@@ -243,6 +248,7 @@ impl AppState {
         *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
         *self.token_override.lock().unwrap() =
             file.token_overrides.get(&key).copied().unwrap_or_default();
+        *self.cc_slots.lock().unwrap() = file.cc_slot_models.get(&key).cloned().unwrap_or_default();
         *self.ui_state_path.lock().unwrap() = Some(path);
     }
 
@@ -256,6 +262,8 @@ impl AppState {
             *self.visible_models.lock().unwrap() = file.visible_models.get(&key).cloned();
             *self.token_override.lock().unwrap() =
                 file.token_overrides.get(&key).copied().unwrap_or_default();
+            *self.cc_slots.lock().unwrap() =
+                file.cc_slot_models.get(&key).cloned().unwrap_or_default();
         }
     }
 
@@ -345,6 +353,16 @@ impl AppState {
         }
         *self.models.lock().unwrap() = models;
         self.reload_ui_for_endpoint();
+        // Drop any CC slot whose model vanished from the new catalog so the
+        // launch gate re-enables (the webview surfaces a warning after Refresh).
+        let catalog = self.model_ids();
+        let pruned = {
+            let mut slots = self.cc_slots.lock().unwrap();
+            slots.prune_to_catalog(&catalog)
+        };
+        if pruned {
+            self.persist_cc_slots();
+        }
     }
 
     pub fn selected_model(&self) -> String {
@@ -394,6 +412,57 @@ impl AppState {
         let (ovr_prompt, ovr_output) = self.token_overrides();
         let (auto_prompt, auto_output) = self.selected_model_limits();
         (ovr_prompt.or(auto_prompt), ovr_output.or(auto_output))
+    }
+
+    /// A snapshot of the current endpoint's Claude Code slot configuration.
+    pub fn cc_slots(&self) -> CcSlots {
+        self.cc_slots.lock().unwrap().clone()
+    }
+
+    /// Whether every Claude Code slot is configured (the launch gate).
+    pub fn cc_slots_complete(&self) -> bool {
+        self.cc_slots.lock().unwrap().is_complete()
+    }
+
+    /// Sets one Claude Code slot and persists it per-endpoint. A `Some(model_id)`
+    /// must name a known model (else `Err`). `inherit` applies only to the
+    /// subagent slot. Mirrors `set_token_overrides`' persistence discipline.
+    pub fn set_cc_slot(
+        &self,
+        slot: CcSlot,
+        model_id: Option<String>,
+        inherit: bool,
+    ) -> Result<(), String> {
+        if let Some(id) = &model_id {
+            let known = self.models.lock().unwrap().iter().any(|m| &m.id == id);
+            if !known {
+                return Err(format!("unknown model: {id}"));
+            }
+        }
+        self.cc_slots.lock().unwrap().set(slot, model_id, inherit);
+        self.persist_cc_slots();
+        Ok(())
+    }
+
+    /// Persists the current endpoint's slot config (best-effort), serialized
+    /// under `ui_io` like the other preference writers. An empty config is
+    /// removed from disk rather than stored.
+    fn persist_cc_slots(&self) {
+        let path = self.ui_state_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            let _io = self.ui_io.lock().unwrap();
+            let key = self.endpoint_key();
+            let slots = self.cc_slots.lock().unwrap().clone();
+            let mut file = UiStateFile::load(&path);
+            if slots == CcSlots::default() {
+                file.cc_slot_models.remove(&key);
+            } else {
+                file.cc_slot_models.insert(key, slots);
+            }
+            if let Err(e) = file.save(&path) {
+                tracing::warn!("failed to persist ui_state.json: {e}");
+            }
+        }
     }
 
     /// Replaces the per-endpoint manual token-limit override and persists it
@@ -766,6 +835,83 @@ mod tests {
         reloaded.load_ui_state(path.clone());
         assert_eq!(reloaded.token_overrides(), (Some(99_000), Some(2_000)));
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cc_slot_set_validates_catalog_and_completes() {
+        use crate::claude::CcSlot;
+        let state = state_with(&[
+            "vendor/opus",
+            "vendor/sonnet",
+            "vendor/haiku",
+            "vendor/fable",
+        ]);
+        assert!(!state.cc_slots_complete());
+        // Unknown model is rejected.
+        assert!(state
+            .set_cc_slot(CcSlot::Opus, Some("ghost".into()), false)
+            .is_err());
+        for (slot, id) in [
+            (CcSlot::Opus, "vendor/opus"),
+            (CcSlot::Sonnet, "vendor/sonnet"),
+            (CcSlot::Haiku, "vendor/haiku"),
+            (CcSlot::Fable, "vendor/fable"),
+        ] {
+            assert!(state.set_cc_slot(slot, Some(id.into()), false).is_ok());
+        }
+        assert!(!state.cc_slots_complete()); // subagent still open
+        assert!(state.set_cc_slot(CcSlot::Subagent, None, true).is_ok());
+        assert!(state.cc_slots_complete());
+        assert!(state.cc_slots().subagent_inherit);
+    }
+
+    #[test]
+    fn cc_slots_persist_and_restore_per_endpoint() {
+        use crate::claude::CcSlot;
+        let path = std::env::temp_dir().join("copilot_proxy_state_ccslots_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/messages";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+        state.set_models(
+            ["vendor/opus", "vendor/sonnet"]
+                .iter()
+                .map(|m| classify_model(m))
+                .collect(),
+        );
+        assert!(state
+            .set_cc_slot(CcSlot::Opus, Some("vendor/opus".into()), false)
+            .is_ok());
+
+        // A fresh state on the same endpoint restores the persisted slot.
+        let reloaded = chat_state(endpoint);
+        reloaded.load_ui_state(path.clone());
+        assert_eq!(
+            reloaded.cc_slots().model_for(CcSlot::Opus),
+            Some("vendor/opus")
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_models_prunes_cc_slot_dropped_from_catalog() {
+        use crate::claude::CcSlot;
+        let path = std::env::temp_dir().join("copilot_proxy_state_ccprune_test.json");
+        let _ = std::fs::remove_file(&path);
+        let endpoint = "https://endpoint.example/v1/messages";
+
+        let state = chat_state(endpoint);
+        state.load_ui_state(path.clone());
+        state.set_models(vec![classify_model("vendor/opus")]);
+        assert!(state
+            .set_cc_slot(CcSlot::Opus, Some("vendor/opus".into()), false)
+            .is_ok());
+
+        // A refresh that no longer lists vendor/opus must clear the slot.
+        state.set_models(vec![classify_model("vendor/other")]);
+        assert_eq!(state.cc_slots().model_for(CcSlot::Opus), None);
         let _ = std::fs::remove_file(&path);
     }
 }

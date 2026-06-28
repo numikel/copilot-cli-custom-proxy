@@ -7,6 +7,7 @@
 //! catalogs, so each remembers its own set of models shown in the tray's
 //! "Models" submenu and its own active model.
 
+use crate::claude::CcSlot;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,6 +22,100 @@ pub struct TokenOverride {
     pub prompt: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<u32>,
+}
+
+/// Per-endpoint Claude Code model-slot configuration. Each fixed slot holds an
+/// optional upstream catalog id; the subagent slot is either a model or set to
+/// inherit (Claude Code resolves it from the other slots). All `None` / `false`
+/// is the empty default and is removed from disk rather than stored.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CcSlots {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opus: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sonnet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haiku: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subagent_inherit: bool,
+}
+
+impl CcSlots {
+    /// The configured catalog id for `slot`, if any.
+    pub fn model_for(&self, slot: CcSlot) -> Option<&str> {
+        match slot {
+            CcSlot::Opus => self.opus.as_deref(),
+            CcSlot::Sonnet => self.sonnet.as_deref(),
+            CcSlot::Haiku => self.haiku.as_deref(),
+            CcSlot::Fable => self.fable.as_deref(),
+            CcSlot::Subagent => self.subagent.as_deref(),
+        }
+    }
+
+    /// Launch gate: the four fixed slots each need a model, and the subagent
+    /// needs a model **or** inherit.
+    pub fn is_complete(&self) -> bool {
+        self.opus.is_some()
+            && self.sonnet.is_some()
+            && self.haiku.is_some()
+            && self.fable.is_some()
+            && (self.subagent.is_some() || self.subagent_inherit)
+    }
+
+    /// Number of satisfied slots out of five (for the tray status line).
+    pub fn configured_count(&self) -> usize {
+        let fixed = [&self.opus, &self.sonnet, &self.haiku, &self.fable]
+            .into_iter()
+            .filter(|s| s.is_some())
+            .count();
+        fixed + usize::from(self.subagent.is_some() || self.subagent_inherit)
+    }
+
+    /// Sets one slot. `inherit` applies only to the subagent slot (ignored
+    /// otherwise); selecting a subagent model clears inherit and vice versa.
+    pub fn set(&mut self, slot: CcSlot, model_id: Option<String>, inherit: bool) {
+        match slot {
+            CcSlot::Opus => self.opus = model_id,
+            CcSlot::Sonnet => self.sonnet = model_id,
+            CcSlot::Haiku => self.haiku = model_id,
+            CcSlot::Fable => self.fable = model_id,
+            CcSlot::Subagent => {
+                if inherit {
+                    self.subagent = None;
+                    self.subagent_inherit = true;
+                } else {
+                    self.subagent = model_id;
+                    self.subagent_inherit = false;
+                }
+            }
+        }
+    }
+
+    /// Drops any slot model not present in `catalog` (e.g. after a Refresh
+    /// removed it), keeping the launch gate honest. Returns whether anything
+    /// changed. Inherit is left untouched.
+    pub fn prune_to_catalog(&mut self, catalog: &[String]) -> bool {
+        let mut changed = false;
+        for slot in [
+            &mut self.opus,
+            &mut self.sonnet,
+            &mut self.haiku,
+            &mut self.fable,
+            &mut self.subagent,
+        ] {
+            if let Some(id) = slot {
+                if !catalog.iter().any(|c| c == id) {
+                    *slot = None;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
 }
 
 /// The persisted UI state file (`ui_state.json`).
@@ -38,6 +133,10 @@ pub struct UiStateFile {
     /// missing entry means "no override" → the model's advertised limits are used.
     #[serde(default)]
     pub token_overrides: HashMap<String, TokenOverride>,
+    /// endpoint url → Claude Code model-slot configuration. A missing entry
+    /// means "no slots configured" for that endpoint.
+    #[serde(default)]
+    pub cc_slot_models: HashMap<String, CcSlots>,
 }
 
 impl UiStateFile {
@@ -164,6 +263,65 @@ mod tests {
                 prompt: Some(128000),
                 output: Some(16384),
             })
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cc_slots_completeness_and_model_lookup() {
+        use crate::claude::CcSlot;
+        let mut s = CcSlots::default();
+        assert!(!s.is_complete());
+        s.set(CcSlot::Opus, Some("vendor/opus".into()), false);
+        s.set(CcSlot::Sonnet, Some("vendor/sonnet".into()), false);
+        s.set(CcSlot::Haiku, Some("vendor/haiku".into()), false);
+        s.set(CcSlot::Fable, Some("vendor/fable".into()), false);
+        // Four fixed slots set, subagent still empty → not complete.
+        assert!(!s.is_complete());
+        // Inherit satisfies the subagent slot.
+        s.set(CcSlot::Subagent, None, true);
+        assert!(s.is_complete());
+        assert!(s.subagent_inherit);
+        assert_eq!(s.model_for(CcSlot::Opus), Some("vendor/opus"));
+        // Picking a subagent model clears inherit.
+        s.set(CcSlot::Subagent, Some("vendor/sub".into()), false);
+        assert!(!s.subagent_inherit);
+        assert_eq!(s.model_for(CcSlot::Subagent), Some("vendor/sub"));
+    }
+
+    #[test]
+    fn cc_slots_prune_drops_models_missing_from_catalog() {
+        use crate::claude::CcSlot;
+        let mut s = CcSlots::default();
+        s.set(CcSlot::Opus, Some("gone".into()), false);
+        s.set(CcSlot::Sonnet, Some("kept".into()), false);
+        let changed = s.prune_to_catalog(&["kept".to_string()]);
+        assert!(changed);
+        assert_eq!(s.opus, None);
+        assert_eq!(s.sonnet.as_deref(), Some("kept"));
+        // A second prune with everything present is a no-op.
+        assert!(!s.prune_to_catalog(&["kept".to_string()]));
+    }
+
+    #[test]
+    fn roundtrips_cc_slots_per_endpoint() {
+        use crate::claude::CcSlot;
+        let path = std::env::temp_dir().join("copilot_proxy_uistate_ccslots_test.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut slots = CcSlots::default();
+        slots.set(CcSlot::Opus, Some("vendor/opus".into()), false);
+        slots.set(CcSlot::Subagent, None, true);
+
+        let mut file = UiStateFile::default();
+        file.cc_slot_models
+            .insert("https://openrouter.ai/api/v1".into(), slots.clone());
+        file.save(&path).unwrap();
+
+        let loaded = UiStateFile::load(&path);
+        assert_eq!(
+            loaded.cc_slot_models.get("https://openrouter.ai/api/v1"),
+            Some(&slots)
         );
         let _ = std::fs::remove_file(&path);
     }

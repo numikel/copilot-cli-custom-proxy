@@ -51,6 +51,28 @@ test("endpointError mirrors the backend endpoint rule", () => {
   assert.match(endpointError(""), /http/);
 });
 
+test("detectApi recognizes the messages suffix", () => {
+  assert.equal(detectApi("https://api.anthropic.com/v1/messages"), "messages");
+  assert.equal(detectApi("https://h/v1/messages///"), "messages");
+});
+
+test("rewriteSuffix swaps to and from messages", () => {
+  assert.equal(
+    rewriteSuffix("https://h/v1/chat/completions", API_SUFFIX.messages),
+    "https://h/v1/messages"
+  );
+  assert.equal(
+    rewriteSuffix("https://h/v1/messages", API_SUFFIX.responses),
+    "https://h/v1/responses"
+  );
+  assert.equal(rewriteSuffix("https://h/v1", API_SUFFIX.messages), "https://h/v1/messages");
+});
+
+test("endpointError accepts the messages suffix and lists it", () => {
+  assert.equal(endpointError("https://api.anthropic.com/v1/messages"), null);
+  assert.match(endpointError("https://h/v1"), /messages/);
+});
+
 test("listenHost extracts the host, including bracketed IPv6", () => {
   assert.equal(listenHost("127.0.0.1:8080"), "127.0.0.1");
   assert.equal(listenHost("localhost:9000"), "localhost");

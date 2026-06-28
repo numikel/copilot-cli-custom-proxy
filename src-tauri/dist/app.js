@@ -27,6 +27,8 @@ const ui = {
   manualCommand: "", // backend-rendered "run manually" snippet for the active agent
   tokenPromptOverride: null, // manual Copilot max-prompt-tokens override (null = auto)
   tokenOutputOverride: null, // manual Copilot max-output-tokens override (null = auto)
+  ccSlots: {}, // { opus, sonnet, haiku, fable, subagent, subagent_inherit }
+  ccSlotsComplete: false,
   filter: "",
   hideNonChat: true,
   visible: new Set(), // model ids shown in the tray "Models" submenu
@@ -83,6 +85,8 @@ function adoptState(s) {
   // limit, which the inputs show as a placeholder read from `models`).
   ui.tokenPromptOverride = s.token_prompt_override ?? null;
   ui.tokenOutputOverride = s.token_output_override ?? null;
+  ui.ccSlots = s.cc_slots || {};
+  ui.ccSlotsComplete = !!s.cc_slots_complete;
 }
 
 async function loadState() {
@@ -243,7 +247,8 @@ function renderAgents() {
   $("agent-meta").textContent = `${ui.agents.length} CLI${ui.agents.length === 1 ? "" : "s"}`;
   grid.innerHTML = ui.agents
     .map((a) => {
-      const gated = !a.enabled;
+      const slotGated = a.id === "claude" && !ui.ccSlotsComplete;
+      const gated = !a.enabled || slotGated;
       const running = ui.running === a.id;
       let cls = "cp-agentbtn";
       if (gated) cls += " is-gated";
@@ -252,8 +257,10 @@ function renderAgents() {
         ? `<span class="cp-agent-live"><span class="cp-livedot"></span>live</span>`
         : "";
       const glyph = gated ? icon("i-ban", 14) : icon("i-play", 14);
-      const hint = gated
+      const hint = !a.enabled
         ? `<div class="cp-gatehint">Needs a <code>${esc(a.api)}</code> endpoint</div>`
+        : slotGated
+        ? `<div class="cp-gatehint">Configure all Claude Code model slots first</div>`
         : "";
       return `<div class="cp-agent-wrap">
         <button type="button" class="${cls}" data-id="${esc(a.id)}" ${gated ? "disabled" : ""}>
@@ -267,6 +274,7 @@ function renderAgents() {
   });
   renderCommands();
   renderTokenLimits();
+  renderCcSlots();
 }
 
 function commandText() {
@@ -298,6 +306,59 @@ function renderTokenLimits() {
   fill($("tok-output"), ui.tokenOutputOverride, model && model.max_output_tokens);
 }
 
+// Claude Code slot panel — visible only for a messages endpoint. The four fixed
+// slots are model dropdowns; the subagent row adds an "Inherit" checkbox
+// (mutually exclusive with picking a model). Each change persists immediately
+// via set_cc_slot.
+const CC_SLOTS = ["opus", "sonnet", "haiku", "fable", "subagent"];
+
+function renderCcSlots() {
+  const shown = ui.activeApi === "messages";
+  $("cc-slots").hidden = !shown;
+  if (!shown) return;
+  const chat = ui.models.filter((m) => m.chat);
+  const rows = $("cc-slot-rows");
+  rows.innerHTML = CC_SLOTS.map((slot) => {
+    const cur = ui.ccSlots[slot] || "";
+    const inherit = slot === "subagent" && !!ui.ccSlots.subagent_inherit;
+    const opts =
+      `<option value="">Select model…</option>` +
+      chat
+        .map((m) => `<option value="${esc(m.id)}"${m.id === cur ? " selected" : ""}>${esc(m.id)}</option>`)
+        .join("");
+    const inheritBox =
+      slot === "subagent"
+        ? `<label class="cp-toggle cp-ccinherit${inherit ? " is-on" : ""}" data-inherit>
+             <span class="cp-toggle-box"><svg width="11" height="11"><use href="#i-check"/></svg></span>Inherit
+           </label>`
+        : "";
+    return `<div class="cp-ccrow">
+      <span class="cp-cclbl">${slot.charAt(0).toUpperCase() + slot.slice(1)}</span>
+      <select class="cp-ccsel${cur ? "" : " cp-ccsel--unset"}" data-slot="${slot}"${inherit ? " disabled" : ""}>${opts}</select>
+      ${inheritBox}
+    </div>`;
+  }).join("");
+
+  rows.querySelectorAll(".cp-ccsel").forEach((sel) => {
+    sel.onchange = () => setCcSlot(sel.dataset.slot, sel.value || null, false);
+  });
+  const inheritEl = rows.querySelector("[data-inherit]");
+  if (inheritEl) {
+    inheritEl.onclick = () => setCcSlot("subagent", null, !ui.ccSlots.subagent_inherit);
+  }
+}
+
+async function setCcSlot(slot, modelId, inherit) {
+  try {
+    adoptState(await invoke("set_cc_slot", { slot, modelId, inherit }));
+    renderCcSlots();
+    renderAgents();
+    renderCommands();
+  } catch (e) {
+    toast(String(e), "err");
+  }
+}
+
 // ───────────────────────── render: status grid ─────────────────────────
 function renderStatus() {
   $("status-meta").textContent = ui.running ? "live" : "idle";
@@ -309,7 +370,7 @@ function renderStatus() {
   $("kv-endpoint").textContent = ui.endpoint || "—";
   $("kv-listening").textContent = ui.listenAddr || "—";
 
-  $("kv-apis").innerHTML = ["chat", "responses"]
+  $("kv-apis").innerHTML = ["chat", "responses", "messages"]
     .map((api) => {
       const on = ui.activeApi === api;
       return `<span class="cp-apichip ${on ? "is-on" : "is-off"}">${api}${on ? "" : " ✕"}</span>`;
@@ -349,6 +410,7 @@ function renderKey() {
 function renderEndpointSwitch(api) {
   $("api-chat").classList.toggle("is-on", api === "chat");
   $("api-responses").classList.toggle("is-on", api === "responses");
+  $("api-messages").classList.toggle("is-on", api === "messages");
 }
 
 function renderEndpoint() {
@@ -452,7 +514,7 @@ let endpointBusy = false;
 
 function setEndpointBusy(on) {
   endpointBusy = on;
-  ["save-endpoint-btn", "api-chat", "api-responses"].forEach((id) => {
+  ["save-endpoint-btn", "api-chat", "api-responses", "api-messages"].forEach((id) => {
     $(id).disabled = on;
   });
 }
@@ -609,6 +671,9 @@ async function doRefresh(afterSave = false) {
     }
     // Pull the refreshed visibility set (the backend resolves defaults).
     await loadState().catch(() => {});
+    if (ui.activeApi === "messages" && !ui.ccSlotsComplete) {
+      toast("A Claude Code slot model is no longer available — reconfigure it.", "err");
+    }
     toast(afterSave ? `Loaded ${ui.models.length} models.` : `Models refreshed — ${ui.models.length}.`);
   } catch (e) {
     ui.phase = "error";
@@ -728,7 +793,7 @@ function bind() {
     // Live-reflect the detected API on the switch while typing.
     renderEndpointSwitch(detectApi($("endpoint-input").value) || ui.activeApi);
   });
-  ["api-chat", "api-responses"].forEach((id) => {
+  ["api-chat", "api-responses", "api-messages"].forEach((id) => {
     $(id).onclick = () => {
       const suffix = $(id).dataset.suffix;
       const cur = $("endpoint-input").value.trim() || ui.endpoint;

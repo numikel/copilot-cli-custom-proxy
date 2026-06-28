@@ -315,6 +315,16 @@ html[data-theme="light"] .cp-gatehint::after{border-top-color:#1a1f27}
 .cp-toklimits .cp-input::-webkit-inner-spin-button,
 .cp-toklimits .cp-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 
+.cp-ccslots{margin-top:9px;display:flex;flex-direction:column;gap:7px}
+.cp-ccslots-hd{font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--text-3)}
+.cp-ccrow{display:flex;align-items:center;gap:8px}
+.cp-cclbl{flex:none;width:64px;font-size:11.5px;color:var(--text-2)}
+.cp-ccsel{flex:1;min-width:0;height:var(--row);padding:0 9px;border-radius:calc(var(--r) - 2px);
+  background:var(--surface-2);color:var(--text);border:1px solid var(--line);font-family:var(--sans);font-size:11.5px}
+.cp-ccsel:focus{border-color:var(--acc-bd);box-shadow:0 0 0 3px var(--acc-soft);outline:none}
+.cp-ccsel--unset{color:var(--text-3)}
+.cp-ccinherit{flex:none}
+
 /* ───────────────────────── STATUS ───────────────────────── */
 .cp-statusgrid{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r);
   background:var(--surface);overflow:hidden;box-shadow:var(--inset)}

@@ -22,5 +22,13 @@ ui_state.json
 .DS_Store
 .ai/**
 .claude/**
+
 # Internal Claude Code instructions — AI-assisted dev artifact, not user-facing
 CLAUDE.md
+
+# Spec-driven development artifacts
+docs/superpowers/**
+.superpowers/**
+
+# Isolated git worktrees (superpowers)
+.worktrees/

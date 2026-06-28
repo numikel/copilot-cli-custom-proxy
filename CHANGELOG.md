@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-06-28
+
+See [docs/changelogs/v0.4.0.md](docs/changelogs/v0.4.0.md) for details.
+
+### Added
+- **Claude Code agent** via Anthropic Messages API (`/messages`) — five-slot model
+  mapping (`proxy-cc/*` labels), tray submenus, settings slot panel, and launch gate.
+- **Copilot token-limit auto-fill** from the upstream `/models` payload (with
+  optional manual override).
+
+### Changed
+- **"Run manually" snippet** matches the real launch wiring for all agents.
+- **Windows CI** retries flaky `tauri-cli` / bundle steps and builds with `--locked`.
+
 ## [0.3.6] — 2026-06-13
 
 ### Changed

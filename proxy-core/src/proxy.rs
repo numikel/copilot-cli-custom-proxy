@@ -1,6 +1,8 @@
+use crate::claude::CcSlot;
 use crate::models::{classify_model, ModelInfo};
-use crate::settings::RuntimeConfig;
+use crate::settings::{ApiKind, RuntimeConfig};
 use crate::state::AppState;
+use crate::ui_state::CcSlots;
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, Request, State},
@@ -11,6 +13,7 @@ use axum::{
     Router,
 };
 use secrecy::{ExposeSecret, SecretString};
+use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -22,6 +25,9 @@ const SKIPPED_REQUEST_HEADERS: &[&str] = &[
     "host",
     "content-length",
     "authorization",
+    // Claude Code authenticates with x-api-key; the proxy injects its own
+    // Authorization upstream, so the client's key is dropped (never forwarded).
+    "x-api-key",
     "connection",
     "transfer-encoding",
     "proxy-connection",
@@ -247,11 +253,31 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
             ),
         };
 
-    // Replace the `model` field with the model selected in the tray.
-    let model = state.selected_model();
-    let outgoing_body = inject_model(&body_bytes, &model);
+    let active_api = state.active_api();
 
-    let target_url = format!("{base}{path_and_query}");
+    // Resolve the outgoing model/body. Chat & responses swap in the single
+    // selected model; messages map the request's proxy-cc/* label to the
+    // configured slot (502 on an empty slot, pass-through for unknown labels).
+    let (model, outgoing_body) = match active_api {
+        Some(ApiKind::Messages) => match resolve_messages_model(&body_bytes, &state.cc_slots()) {
+            Ok(pair) => pair,
+            Err(slot) => {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    format!(
+                        "Claude Code {slot} slot not configured — set it in the settings window."
+                    ),
+                )
+            }
+        },
+        _ => {
+            let model = state.selected_model();
+            let body = inject_model(&body_bytes, &model);
+            (model, body)
+        }
+    };
+
+    let target_url = format!("{base}{}", forward_path(active_api, path_and_query));
 
     // Record + log so you can see exactly what the proxy forwards and to where.
     state.record_request(&model, path_and_query, &target_url);
@@ -293,6 +319,46 @@ async fn proxy_handler(State(state): State<Arc<AppState>>, req: Request) -> Resp
             format!("failed to reach the endpoint: {e}"),
         ),
     }
+}
+
+/// The model field of a JSON request body, if present.
+fn body_model(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from))
+}
+
+/// Maps a Messages-API request's `model` through the configured Claude Code
+/// slots. A `proxy-cc/<slot>` label is rewritten to the slot's catalog id;
+/// an unknown model (or a missing one) passes through unchanged. Returns the
+/// effective model (for logging) and the outgoing body, or the slot's display
+/// name when a known label points at an empty slot (caller → 502).
+fn resolve_messages_model(body: &[u8], slots: &CcSlots) -> Result<(String, Bytes), &'static str> {
+    let model = body_model(body);
+    match model.as_deref().and_then(CcSlot::from_label) {
+        Some(slot) => match slots.model_for(slot) {
+            Some(id) => Ok((id.to_string(), inject_model(body, id))),
+            None => Err(slot.display_name()),
+        },
+        None => Ok((model.unwrap_or_default(), Bytes::copy_from_slice(body))),
+    }
+}
+
+/// The upstream path for a forwarded request. Identical to the incoming path for
+/// chat/responses. For the Messages API, Claude Code always targets
+/// `/v1/messages…` while the configured endpoint base already carries the
+/// provider's version segment, so a leading `/v1` is stripped to avoid a doubled
+/// version (`/v1/v1/messages`).
+fn forward_path(api: Option<ApiKind>, path_and_query: &str) -> Cow<'_, str> {
+    if api == Some(ApiKind::Messages) {
+        if let Some(rest) = path_and_query.strip_prefix("/v1/") {
+            return Cow::Owned(format!("/{rest}"));
+        }
+        if path_and_query == "/v1" {
+            return Cow::Borrowed("/");
+        }
+    }
+    Cow::Borrowed(path_and_query)
 }
 
 /// Replaces the `model` field in a JSON body if present. Otherwise (empty body,
@@ -360,7 +426,16 @@ fn error_response(status: StatusCode, message: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude::CcSlot;
+    use crate::settings::ApiKind;
+    use crate::ui_state::CcSlots;
     use std::net::Ipv4Addr;
+
+    fn slots_with_opus() -> CcSlots {
+        let mut s = CcSlots::default();
+        s.set(CcSlot::Opus, Some("vendor/opus-x".into()), false);
+        s
+    }
 
     const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
     const LAN: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
@@ -432,5 +507,57 @@ mod tests {
     fn extract_token_limits_absent_when_bare_id() {
         let m = serde_json::json!({ "id": "x" });
         assert_eq!(extract_token_limits(&m), (None, None));
+    }
+
+    #[test]
+    fn forward_path_strips_leading_v1_for_messages_only() {
+        // Messages: Claude Code always sends /v1/messages; base already carries
+        // the version, so the leading /v1 is dropped.
+        assert_eq!(
+            forward_path(Some(ApiKind::Messages), "/v1/messages"),
+            "/messages"
+        );
+        assert_eq!(
+            forward_path(Some(ApiKind::Messages), "/v1/messages/count_tokens"),
+            "/messages/count_tokens"
+        );
+        // Chat / responses are untouched.
+        assert_eq!(
+            forward_path(Some(ApiKind::Chat), "/chat/completions"),
+            "/chat/completions"
+        );
+        assert_eq!(forward_path(None, "/v1/messages"), "/v1/messages");
+    }
+
+    #[test]
+    fn resolve_messages_maps_known_label() {
+        let body = br#"{"model":"proxy-cc/opus","messages":[]}"#;
+        let (model, out) = resolve_messages_model(body, &slots_with_opus()).unwrap();
+        assert_eq!(model, "vendor/opus-x");
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["model"], "vendor/opus-x");
+    }
+
+    #[test]
+    fn resolve_messages_passes_through_unknown_model() {
+        let body = br#"{"model":"some/raw-id","messages":[]}"#;
+        let (model, out) = resolve_messages_model(body, &slots_with_opus()).unwrap();
+        assert_eq!(model, "some/raw-id");
+        // Unchanged body.
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["model"], "some/raw-id");
+    }
+
+    #[test]
+    fn resolve_messages_errs_on_empty_slot() {
+        // proxy-cc/sonnet requested but the Sonnet slot is empty.
+        let body = br#"{"model":"proxy-cc/sonnet","messages":[]}"#;
+        let err = resolve_messages_model(body, &slots_with_opus()).unwrap_err();
+        assert_eq!(err, "Sonnet");
+    }
+
+    #[test]
+    fn x_api_key_is_skipped() {
+        assert!(SKIPPED_REQUEST_HEADERS.contains(&"x-api-key"));
     }
 }
