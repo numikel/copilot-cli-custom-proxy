@@ -21,25 +21,28 @@ use std::path::Path;
 pub enum ApiKind {
     Chat,
     Responses,
+    Messages,
 }
 
 impl ApiKind {
     /// All known APIs.
-    pub const ALL: &'static [ApiKind] = &[ApiKind::Chat, ApiKind::Responses];
+    pub const ALL: &'static [ApiKind] = &[ApiKind::Chat, ApiKind::Responses, ApiKind::Messages];
 
     /// The URL path suffix that identifies this API.
     pub fn suffix(self) -> &'static str {
         match self {
             ApiKind::Chat => "/chat/completions",
             ApiKind::Responses => "/responses",
+            ApiKind::Messages => "/messages",
         }
     }
 
-    /// Stable lowercase id used in the JS↔Rust contract ("chat" / "responses").
+    /// Stable lowercase id used in the JS↔Rust contract.
     pub fn as_str(self) -> &'static str {
         match self {
             ApiKind::Chat => "chat",
             ApiKind::Responses => "responses",
+            ApiKind::Messages => "messages",
         }
     }
 }
@@ -191,7 +194,7 @@ pub fn validate_endpoint_url(url: &str) -> Result<ApiKind, String> {
         .copied()
         .find(|api| path.ends_with(api.suffix()))
         .ok_or_else(|| {
-            "Endpoint URL must end with /chat/completions or /responses \
+            "Endpoint URL must end with /chat/completions, /responses, or /messages \
              (do not stop at /v1, or the API type is ambiguous)"
                 .to_string()
         })
@@ -306,6 +309,27 @@ mod tests {
         let c = cfg("https://openrouter.ai/api/v1/chat/completions");
         assert_eq!(c.active_api(), Some(ApiKind::Chat));
         assert_eq!(c.base_url().unwrap(), "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn detects_messages_api() {
+        let c = cfg("https://api.anthropic.com/v1/messages");
+        assert_eq!(c.active_api(), Some(ApiKind::Messages));
+        assert_eq!(c.base_url().unwrap(), "https://api.anthropic.com/v1");
+        assert_eq!(
+            c.models_url().unwrap(),
+            "https://api.anthropic.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn validate_endpoint_accepts_messages_suffix() {
+        assert_eq!(
+            validate_endpoint_url("https://api.anthropic.com/v1/messages").unwrap(),
+            ApiKind::Messages
+        );
+        // The suffix must live in the path, not the host.
+        assert!(validate_endpoint_url("https://messages").is_err());
     }
 
     #[test]
