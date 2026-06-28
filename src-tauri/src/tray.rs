@@ -79,16 +79,17 @@ fn cc_status_line(slots: &CcSlots) -> String {
 /// slot's current choice checked; the subagent submenu adds an "Inherit" toggle.
 /// Menu item ids: `model::<id>` (single) and `cc::<slot>::<id>` /
 /// `cc::subagent::__inherit__` (slots).
-fn append_models_section(
-    app: &AppHandle,
-    menu: &Menu<Wry>,
-    state: &AppState,
-) -> tauri::Result<()> {
+fn append_models_section(app: &AppHandle, menu: &Menu<Wry>, state: &AppState) -> tauri::Result<()> {
     if state.active_api() == Some(ApiKind::Messages) {
         let slots = state.cc_slots();
         let visible = state.visible_model_ids();
         for &slot in CcSlot::ALL {
-            let submenu = Submenu::with_id(app, format!("cc_menu::{}", slot.id()), slot.display_name(), true)?;
+            let submenu = Submenu::with_id(
+                app,
+                format!("cc_menu::{}", slot.id()),
+                slot.display_name(),
+                true,
+            )?;
             if slot == CcSlot::Subagent {
                 let inherit = CheckMenuItem::with_id(
                     app,
@@ -134,12 +135,25 @@ fn append_models_section(
     let models_menu = Submenu::with_id(app, "models_menu", "Models", true)?;
     let ids = tray_submenu_ids(state, &selected);
     if ids.is_empty() {
-        let empty = MenuItem::with_id(app, "models_empty", "No models — Refresh first", false, None::<&str>)?;
+        let empty = MenuItem::with_id(
+            app,
+            "models_empty",
+            "No models — Refresh first",
+            false,
+            None::<&str>,
+        )?;
         models_menu.append(&empty)?;
     } else {
         for model in ids {
             let checked = model == selected;
-            let item = CheckMenuItem::with_id(app, format!("model::{model}"), &model, true, checked, None::<&str>)?;
+            let item = CheckMenuItem::with_id(
+                app,
+                format!("model::{model}"),
+                &model,
+                true,
+                checked,
+                None::<&str>,
+            )?;
             models_menu.append(&item)?;
         }
     }

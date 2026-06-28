@@ -841,7 +841,12 @@ mod tests {
     #[test]
     fn cc_slot_set_validates_catalog_and_completes() {
         use crate::claude::CcSlot;
-        let state = state_with(&["vendor/opus", "vendor/sonnet", "vendor/haiku", "vendor/fable"]);
+        let state = state_with(&[
+            "vendor/opus",
+            "vendor/sonnet",
+            "vendor/haiku",
+            "vendor/fable",
+        ]);
         assert!(!state.cc_slots_complete());
         // Unknown model is rejected.
         assert!(state
@@ -883,7 +888,10 @@ mod tests {
         // A fresh state on the same endpoint restores the persisted slot.
         let reloaded = chat_state(endpoint);
         reloaded.load_ui_state(path.clone());
-        assert_eq!(reloaded.cc_slots().model_for(CcSlot::Opus), Some("vendor/opus"));
+        assert_eq!(
+            reloaded.cc_slots().model_for(CcSlot::Opus),
+            Some("vendor/opus")
+        );
         let _ = std::fs::remove_file(&path);
     }
 

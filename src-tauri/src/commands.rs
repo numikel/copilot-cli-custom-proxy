@@ -888,7 +888,9 @@ mod tests {
 
     #[test]
     fn manual_command_codex_propagates_single_quote_rejection() {
-        assert!(manual_command(Agent::Codex, "http://127.0.0.1:8080'x", (None, None), false).is_err());
+        assert!(
+            manual_command(Agent::Codex, "http://127.0.0.1:8080'x", (None, None), false).is_err()
+        );
     }
 
     #[test]
@@ -988,10 +990,15 @@ mod tests {
         let watch = AgentWatch::default();
         let s = state_with_endpoint("https://e.example/v1/messages");
         s.set_models(
-            ["vendor/opus", "vendor/sonnet", "vendor/haiku", "vendor/fable"]
-                .iter()
-                .map(|m| proxy_core::classify_model(m))
-                .collect(),
+            [
+                "vendor/opus",
+                "vendor/sonnet",
+                "vendor/haiku",
+                "vendor/fable",
+            ]
+            .iter()
+            .map(|m| proxy_core::classify_model(m))
+            .collect(),
         );
         let view = state_view(&s, &watch);
         assert!(!view.cc_slots_complete);

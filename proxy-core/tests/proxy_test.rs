@@ -445,10 +445,8 @@ async fn messages_unconfigured_slot_returns_502() {
     assert_eq!(resp.status(), 502);
     let v: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(v["error"]["type"], "proxy_error");
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Opus slot not configured")
-    );
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Opus slot not configured"));
 }
