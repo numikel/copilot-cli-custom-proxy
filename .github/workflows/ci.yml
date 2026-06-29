@@ -93,7 +93,7 @@ jobs:
             if ($fullBundle) {
               cargo tauri build -- --locked
             } else {
-              cargo tauri build -- --locked --no-bundle
+              cargo tauri build --no-bundle -- --locked
             }
             if ($LASTEXITCODE -eq 0) { exit 0 }
             if ($i -eq $max) { exit $LASTEXITCODE }
