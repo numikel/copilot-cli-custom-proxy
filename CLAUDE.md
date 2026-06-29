@@ -129,7 +129,7 @@ Cargo workspace, two members:
     supersedes the previous entry (the superseded terminal keeps running, just
     untracked). Windows-only spawn bits (`creation_flags`) stay
     `#[cfg(windows)]`-gated with a non-Windows counterpart, because CI clippy
-    runs on ubuntu.
+    for `copilot-proxy` runs on the Windows job.
   - `main.rs` — thin composer: declares the modules, builds the Tauri app, binds
     the listener synchronously (so a bind error is a startup error), `.manage`s
     state + `ProxyTask` + `AgentWatch` + `StartupNotice`, opens settings on first
@@ -186,9 +186,8 @@ Cargo workspace, two members:
 
 ```bash
 cargo test -p proxy-core        # unit + integration (classification, atomic_io, gateway auth, swap, streaming, endpoint, loopback)
-cargo test -p copilot-proxy     # agent gating, endpoint/listen validation, local_base_url, agent watch
-cargo check --all-targets
-cargo clippy --all-targets
+cargo clippy -p proxy-core --all-targets -- -D warnings   # Linux CI scope
+cargo clippy -p copilot-proxy --all-targets -- -D warnings   # Windows CI scope
 node --test "src-tauri/webview-tests/*.test.js"   # webview validation helpers (glob form — pointing at the bare dir fails)
 cargo tauri dev                 # manual — no config needed; first run opens settings
 ```
@@ -199,28 +198,30 @@ Config lives in `config.json` next to the exe (written by the settings window);
 
 ## Release
 
-CI (`.github/workflows/ci.yml`) builds the Windows exe + MSI/NSIS bundles on
-**every** push, but uploads them only as run **artifacts** (Actions → run →
-Artifacts, ~90-day retention). A GitHub **Release** is published *only* by the
-`Attach to GitHub Release` step, which is gated on `refs/tags/v*`. **No tag ⇒ no
-release** — pushing commits or merging a PR never publishes one.
+Two workflows split CI from publishing:
+
+- **`.github/workflows/ci.yml`** — quality gates on every PR and `main` push. Linux runs `proxy-core` fmt/clippy/tests + webview tests (~1–2 min). Windows builds the Tauri app: PRs upload `.exe` only (`--no-bundle`); `main` push uploads full MSI/NSIS artifacts for packaging validation. Both use `cancel-in-progress` concurrency.
+- **`.github/workflows/release.yml`** — runs **only** on pushed tags `v*`. Validates that the tag matches `[workspace.package].version` in `Cargo.toml` and `version` in `src-tauri/tauri.conf.json`, builds full Windows bundles, and publishes a GitHub Release with 3 assets.
 
 To cut a release:
 
 1. Bump `version` in **both** `Cargo.toml` (`[workspace.package]`) and
    `src-tauri/tauri.conf.json` — they **must match the tag**. The release assets
-   are named from `tauri.conf.json` (e.g. `Copilot.Proxy_0.3.3_x64-setup.exe`),
+   are named from `tauri.conf.json` (e.g. `Copilot.Proxy_0.4.0_x64-setup.exe`),
    so a mismatch ships mislabeled installers.
-2. Merge to `main` and let CI go green.
+2. Merge to `main` and let CI go green (full bundle validates packaging).
 3. Tag the **`main` tip** (not a feature branch) and push the tag:
    ```bash
    git tag -a vX.Y.Z <main-sha> -m "Release vX.Y.Z"
    git push origin vX.Y.Z
    ```
-   The pushed tag triggers a fresh CI run; on success the release appears under
-   **Releases** with `copilot-proxy.exe`, `*.msi`, and `*-setup.exe` attached.
+   The pushed tag triggers **`release.yml` only** (CI does not re-run on tags).
+   On success the release appears under **Releases** with `copilot-proxy.exe`,
+   `*.msi`, and `*-setup.exe` attached.
 
 Gotchas:
 - Tagging only locally does nothing — the workflow fires on the **pushed** tag.
 - Tag a commit that already lives on `main`, else you publish feature-branch code.
 - Verify with `gh release view vX.Y.Z --json assets` (expect 3 assets).
+- Use `workflow_dispatch` on CI with `full_bundle: true` to test installers on a feature branch before tagging.
+- Bump the tauri-cli cache key suffix (`v1` → `v2`) in both workflows when changing the `^2.0` constraint.

@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate version match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches Cargo.toml and tauri.conf.json
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAURI_VERSION=$(grep -E '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+          echo "Tag version:      $TAG"
+          echo "Cargo.toml:       $CARGO_VERSION"
+          echo "tauri.conf.json:  $TAURI_VERSION"
+
+          if [ "$TAG" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+          if [ "$TAG" != "$TAURI_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match tauri.conf.json version $TAURI_VERSION"
+            exit 1
+          fi
+
+  build:
+    name: Build Windows release
+    needs: validate
+    runs-on: windows-latest
+    env:
+      CARGO_NET_RETRY: 10
+      CARGO_HTTP_MULTIPLEXING: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache tauri-cli
+        uses: actions/cache@v4
+        id: tauri-cli-cache
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-2-${{ runner.os }}-v1
+
+      - name: Install Tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $max = 3
+          for ($i = 1; $i -le $max; $i++) {
+            cargo install tauri-cli --version "^2.0" --locked
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -eq $max) { exit $LASTEXITCODE }
+            Write-Host "tauri-cli install attempt $i failed, retrying in 30s..."
+            Start-Sleep -Seconds 30
+          }
+
+      - name: Build (release + bundles)
+        shell: pwsh
+        run: |
+          $max = 3
+          for ($i = 1; $i -le $max; $i++) {
+            cargo tauri build -- --locked
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -eq $max) { exit $LASTEXITCODE }
+            Write-Host "Build attempt $i failed, retrying in 30s..."
+            Start-Sleep -Seconds 30
+          }
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: copilot-proxy-exe
+          path: target/release/copilot-proxy.exe
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: copilot-proxy-installers
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: copilot-proxy-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/**/*
