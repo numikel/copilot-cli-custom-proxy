@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-06-29
+
+See [docs/changelogs/v0.4.1.md](docs/changelogs/v0.4.1.md) for details.
+
+### Added
+- **Dedicated release workflow** — tagged `v*` pushes build installers and publish
+  a GitHub Release.
+
+### Changed
+- **Leaner CI** — Linux tests `proxy-core` only; Windows builds the `.exe` without
+  bundling installers on every push (bundles on release tags only).
+- **CI concurrency** — superseded runs on the same branch are cancelled.
+
+### Fixed
+- **`tauri build --no-bundle`** is passed to the Tauri CLI, not Cargo.
+
 ## [0.4.0] — 2026-06-28
 
 See [docs/changelogs/v0.4.0.md](docs/changelogs/v0.4.0.md) for details.
