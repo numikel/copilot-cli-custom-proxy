@@ -16,6 +16,8 @@ See [docs/changelogs/v0.4.1.md](docs/changelogs/v0.4.1.md) for details.
 - **Leaner CI** — Linux tests `proxy-core` only; Windows builds the `.exe` without
   bundling installers on every push (bundles on release tags only).
 - **CI concurrency** — superseded runs on the same branch are cancelled.
+- **README** documents Claude Code (Messages API, five-slot mapping) and the split
+  CI / release workflows.
 
 ### Fixed
 - **`tauri build --no-bundle`** is passed to the Tauri CLI, not Cargo.

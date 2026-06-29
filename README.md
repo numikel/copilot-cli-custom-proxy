@@ -7,12 +7,12 @@
 ![Tauri v2](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri)
 
 A local HTTP proxy that lives in the system tray (Windows) for **GitHub Copilot
-CLI**. It intercepts requests, **swaps the LLM model on the fly**, and forwards
-them to a configured OpenAI-compatible endpoint — without restarting your
-terminal session.
+CLI**, **Codex CLI**, and **Claude Code**. It intercepts requests, **swaps the
+LLM model on the fly**, and forwards them to a configured OpenAI-compatible (or
+Anthropic Messages) endpoint — without restarting your terminal session.
 
-In BYOK mode, Copilot CLI fixes the model at startup (`COPILOT_MODEL`). This
-proxy lets you switch the model from the tray menu while you work.
+In BYOK mode, these CLIs fix the model at startup. This proxy lets you switch
+the model from the tray menu (or map five Claude Code slots) while you work.
 
 ## How it works
 
@@ -55,14 +55,15 @@ window shows a one-time notice so the reset isn't silent.
 In the **Endpoint** section you set:
 
 - **Endpoint URL** — the *full* upstream URL, including a host and the API
-  suffix, e.g. `https://openrouter.ai/api/v1/chat/completions` or
-  `https://openrouter.ai/api/v1/responses`. **Do not stop at `/v1`** — the URL
-  suffix (matched against the URL's path, so it must be the trailing path
-  segment, not part of the host) is what tells the proxy whether this is a Chat
-  Completions or a Responses endpoint.
-- **Chat completions ⟷ Responses switch** — one API is active at a time. Flipping
-  the switch rewrites the URL suffix; the active API decides which CLI agent you
-  can launch (Copilot for chat, Codex for responses).
+  suffix, e.g. `https://openrouter.ai/api/v1/chat/completions`,
+  `https://openrouter.ai/api/v1/responses`, or
+  `https://your-provider.example.com/v1/messages`. **Do not stop at `/v1`** — the
+  URL suffix (matched against the URL's path, so it must be the trailing path
+  segment, not part of the host) is what tells the proxy which wire API is active.
+- **Chat completions ⟷ Responses ⟷ Messages switch** — one API is active at a
+  time. Flipping the switch rewrites the URL suffix; the active API decides which
+  CLI agent you can launch (Copilot for chat, Codex for responses, Claude Code
+  for messages).
 - **Listen address** — the local `host:port` the proxy binds (the host is
   restricted to a strict character set). Changing it restarts only the background
   proxy task (no app/terminal restart): the new address is bound first, so if the
@@ -83,9 +84,10 @@ matching agent:
 |-----------------|-----|-------|
 | `/chat/completions` | chat | GitHub Copilot CLI |
 | `/responses` | responses | Codex CLI |
+| `/messages` | messages (Anthropic) | Claude Code |
 
-The other agent is shown disabled (settings window) or hidden (tray), so you
-never point a CLI at an endpoint that can't answer it. To use the other agent,
+The other agents are shown disabled (settings window) or hidden (tray), so you
+never point a CLI at an endpoint that can't answer it. To use another agent,
 flip the switch (and ensure your upstream serves that API).
 
 ### Optional `config.toml` seed
@@ -115,17 +117,20 @@ On launch the app minimizes to the tray. From the tray menu you can:
 - pick the active model (applied instantly, and remembered per-endpoint across
   restarts),
 - **"Refresh models"** — re-fetch the model list from the endpoint,
-- **"Run Copilot" / "Run Codex"** — open a new terminal with the proxy
-  environment already set and start the chosen agent (see the Codex note below),
+- **"Run Copilot" / "Run Codex" / "Run Claude Code"** — open a new terminal with
+  the proxy environment already set and start the chosen agent (see the Codex and
+  Claude Code notes below),
 - open **"Open Settings…"** for the full window (API key, model list, launcher),
 - choose **"Quit"** to exit.
 
 The tray icon has two states: an accent-filled glyph when the proxy is ready (a
 key is set and a model is selected) and a muted outline when it is idle. Models
 live in a **"Models ▸" submenu** (not the first level) so "Open Settings…" and
-"Quit" stay reachable even with hundreds of models. You choose **which** models
-appear in that submenu in the settings window (see below) — the full catalog is
-always available there.
+"Quit" stay reachable even with hundreds of models. On a **Messages** endpoint
+that submenu nests one **per-slot** submenu (Opus … Subagent) instead of a flat
+model list — see [Configuring Claude Code](#configuring-claude-code). You choose
+**which** chat models appear in those submenus in the settings window (see below)
+— the full catalog is always available there.
 
 ## Settings window
 
@@ -134,13 +139,13 @@ bundler, served from `src-tauri/dist/` under a restrictive `'self'` CSP). It is 
 **frameless** window (`decorations: false`) with its own title bar, and ships a
 **dark/light theme toggle** (defaults to dark; the choice is remembered in
 `localStorage`). Fonts (IBM Plex Sans/Mono) are bundled locally, so the UI needs
-no network access. It has five sections:
+no network access. It has six sections:
 
-- **Endpoint** — the full upstream URL with a **Chat completions ⟷ Responses**
-  switch (one active at a time; the switch rewrites the URL suffix), plus the
-  local **listen address**. Both are validated and persisted to `config.json`;
-  changing the listen address restarts the proxy task. An **"expose to network"**
-  toggle lets you bind beyond loopback on purpose — see
+- **Endpoint** — the full upstream URL with a **Chat completions ⟷ Responses ⟷
+  Messages** switch (one active at a time; the switch rewrites the URL suffix),
+  plus the local **listen address**. Both are validated and persisted to
+  `config.json`; changing the listen address restarts the proxy task. An
+  **"expose to network"** toggle lets you bind beyond loopback on purpose — see
   [Exposing the proxy on your network](#exposing-the-proxy-on-your-network).
 - **API key** — paste your key (held in memory only; a **forget** link clears it).
 - **Model** — searchable list of the upstream catalog with a **"hide non-chat"**
@@ -152,6 +157,12 @@ no network access. It has five sections:
   checkbox** that controls whether it appears in the tray's Models submenu — with
   **all / none** shortcuts and **shift-click** range selection. That tray-visibility
   choice is likewise saved per-endpoint to `ui_state.json` (next to `config.toml`).
+- **Claude Code slots** *(Messages endpoint only)* — five model slots (Opus,
+  Sonnet, Haiku, Fable, Subagent). Each maps a stable `proxy-cc/<slot>` label
+  (what Claude Code sends) to a catalog model id at request time. Choices persist
+  per endpoint in `ui_state.json`. The subagent slot accepts a model **or** an
+  **Inherit** toggle (mutually exclusive). **Run Claude Code** stays disabled
+  until all five slots are configured.
 - **Start agent** — one button per known agent, gated against the active
   endpoint's API (the incompatible agent is disabled with a tooltip explaining
   which API it needs). A copy-able PowerShell command block is shown too. The
@@ -220,10 +231,42 @@ backtick continuations above are only for readability).
 > **Important:** since February 2026 Codex speaks **only the Responses API**
 > (`wire_api = "responses"`); the `chat` wire API was removed. Your endpoint must
 > therefore be a **`/responses`** URL — set it in the settings window (or flip the
-> switch to **Responses**). When the active endpoint is a chat one,
+> switch to **Responses**). When the active endpoint is a chat or messages one,
 > **"Run Codex" is disabled**, so you never point Codex at an endpoint that can't
 > answer it. Chat-only upstreams (e.g. a plain Ollama server) would need a
 > Responses→Chat translation proxy, which is out of scope for now.
+
+### Configuring Claude Code
+
+Claude Code speaks the **Anthropic Messages API** (`/messages`). Set your endpoint
+to a Messages URL (or flip the switch to **Messages**), configure all five model
+slots in the settings window, then use **"Run Claude Code"** (tray or settings
+window).
+
+At launch the proxy sets `ANTHROPIC_BASE_URL` to the local proxy and maps each
+slot to a stable `proxy-cc/<slot>` label via env vars (`ANTHROPIC_DEFAULT_OPUS_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL`, …). At request time the proxy rewrites those
+labels to the catalog model ids you picked. The subagent slot can **inherit**
+Claude Code's default (env var omitted) or point at `proxy-cc/subagent`.
+
+The equivalent manual commands are shown under **"Copy commands"**:
+
+```powershell
+$env:ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
+$env:ANTHROPIC_API_KEY="proxy-managed"   # dummy — the proxy injects the real key
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="proxy-cc/opus"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="proxy-cc/sonnet"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="proxy-cc/haiku"
+$env:ANTHROPIC_DEFAULT_FABLE_MODEL="proxy-cc/fable"
+# $env:CLAUDE_CODE_SUBAGENT_MODEL="proxy-cc/subagent"   # omit to inherit
+claude
+```
+
+> **Important:** your upstream must serve **`/messages`** (Anthropic-compatible).
+> OpenAI-style chat endpoints won't work for Claude Code. When the active endpoint
+> is chat or responses, **"Run Claude Code" is disabled**. All five slots must be
+> configured before launch — the tray shows **Claude Code — N/5 slots set** until
+> then.
 
 ### Verifying what Copilot really talks to
 
@@ -249,13 +292,16 @@ cargo run -p proxy-core --example demo   # end-to-end demo against a stub endpoi
 
 ## CI / prebuilt executable
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
+Two GitHub Actions workflows run on push:
 
-- **test** (Linux) — runs the core tests and type-checks the Tauri app.
-- **build-windows** — builds the release `.exe` and the MSI/NSIS installers, and
-  uploads them as workflow **artifacts** (downloadable from the run's summary page).
+- **CI** (`.github/workflows/ci.yml`) — on every push to `main` and on pull
+  requests: Linux runs `proxy-core` tests only (~1 min); Windows builds the release
+  `.exe` (no installers) and uploads it as a workflow **artifact**.
+- **Release** (`.github/workflows/release.yml`) — on `v*` tags only: validates
+  that the tag matches `Cargo.toml` / `tauri.conf.json`, builds the `.exe` plus
+  MSI/NSIS installers, and attaches them to a GitHub **Release**.
 
-Push a `v*` tag (e.g. `v0.1.0`) to also attach the binaries to a GitHub Release.
+Push a `v*` tag (e.g. `v0.4.1`) to publish installers to Releases.
 
 ## Security
 
@@ -289,9 +335,9 @@ it. To let another device (e.g. a second machine on your LAN) use the proxy:
 3. On the remote client, point it at `http://<this-machine-ip>:8080` and send the
    gateway token in the `Authorization` header: `Authorization: Bearer <token>`.
 
-Loopback clients (including the locally launched Copilot/Codex agents, which
-always connect via `127.0.0.1`) never need the token — it gates non-loopback
-peers only. The token is a self-generated credential for *this proxy*, separate
+Loopback clients (including the locally launched Copilot, Codex, and Claude Code
+agents, which always connect via `127.0.0.1`) never need the token — it gates
+non-loopback peers only. The token is a self-generated credential for *this proxy*, separate
 from your upstream API key; it is stored in `config.json` so a remote device need
 not re-pair after a restart. Regenerate it to revoke access. Even token-gated,
 remember the proxy spends your upstream key on behalf of any authorized client —
@@ -299,8 +345,9 @@ only expose it on networks you trust.
 
 ## Notes
 
-- **OpenAI-compatible** endpoints are supported. Copilot uses Chat Completions
-  (`/chat/completions`); Codex uses the Responses API (`/responses`). The proxy
-  forwards whichever path the client sends, so the upstream must support it.
+- **OpenAI-compatible** endpoints are supported for Copilot (`/chat/completions`)
+  and Codex (`/responses`). Claude Code needs an **Anthropic Messages**
+  (`/messages`) endpoint. The proxy forwards whichever path the client sends, so
+  the upstream must support it.
 - All models share a single endpoint base; the proxy only changes the `model` field.
 - The API key lives in memory only — re-enter it after restarting the app.
