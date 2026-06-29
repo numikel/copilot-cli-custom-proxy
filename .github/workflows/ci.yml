@@ -50,32 +50,51 @@ jobs:
       # Mitigate transient crates.io TLS flakes on windows-latest (schannel).
       CARGO_NET_RETRY: 10
       CARGO_HTTP_MULTIPLEXING: false
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
 
+      - name: Cache tauri-cli
+        uses: actions/cache@v4
+        id: tauri-cli-cache
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-2-${{ runner.os }}-v1
+
       - name: Install Tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $max = 3
           for ($i = 1; $i -le $max; $i++) {
-            cargo install tauri-cli --version "^2.0"
+            cargo install tauri-cli --version "^2.0" --locked
             if ($LASTEXITCODE -eq 0) { exit 0 }
             if ($i -eq $max) { exit $LASTEXITCODE }
             Write-Host "tauri-cli install attempt $i failed, retrying in 30s..."
             Start-Sleep -Seconds 30
           }
 
-      - name: Build (release + bundles)
+      - name: Clippy (warnings as errors)
+        run: cargo clippy -p copilot-proxy --all-targets -- -D warnings
+
+      - name: Build (release)
         shell: pwsh
         run: |
+          $fullBundle = $false
+          if ("${{ github.ref }}" -eq 'refs/heads/main') { $fullBundle = $true }
+          if ("${{ github.event_name }}" -eq 'workflow_dispatch' -and '${{ inputs.full_bundle }}' -eq 'true') { $fullBundle = $true }
+
           $max = 3
           for ($i = 1; $i -le $max; $i++) {
-            cargo tauri build -- --locked
+            if ($fullBundle) {
+              cargo tauri build -- --locked
+            } else {
+              cargo tauri build -- --locked --no-bundle
+            }
             if ($LASTEXITCODE -eq 0) { exit 0 }
             if ($i -eq $max) { exit $LASTEXITCODE }
             Write-Host "Build attempt $i failed, retrying in 30s..."
@@ -89,6 +108,7 @@ jobs:
           path: target/release/copilot-proxy.exe
 
       - name: Upload installers
+        if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.full_bundle)
         uses: actions/upload-artifact@v7
         with:
           name: copilot-proxy-installers
@@ -96,12 +116,3 @@ jobs:
             target/release/bundle/msi/*.msi
             target/release/bundle/nsis/*-setup.exe
           if-no-files-found: warn
-
-      - name: Attach to GitHub Release (on version tags)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            target/release/copilot-proxy.exe
-            target/release/bundle/msi/*.msi
-            target/release/bundle/nsis/*-setup.exe
