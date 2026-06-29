@@ -1,11 +1,19 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
-    tags: ["v*"]
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      full_bundle:
+        description: Build MSI/NSIS installers
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
